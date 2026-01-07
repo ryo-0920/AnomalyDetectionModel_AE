@@ -1,0 +1,117 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AE_transformer 実行マニュアル (2025/12/8時点)</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <h1>AE_transformer 実行マニュアル<br><small>2025/12/8時点</small></h1>
+    <section class="box important">
+        <h2>1. 前提条件の明示</h2>
+        <ul>
+            <li>
+                <strong>外部サイトからインストールする際の注意</strong><br>
+                社内や利用環境で外部サイトからのソフトウェアインストールが許可されているか必ず確認してください。
+            </li>
+            <li>
+                <strong>PythonおよびGitのインストール</strong><br>
+                Pythonは<a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer">公式サイト</a>よりダウンロード・インストールしてください。<br>
+                Gitは<a href="https://git-scm.com/downloads" target="_blank" rel="noopener noreferrer">公式サイト</a>からインストール可能です。
+            </li>
+            <li>
+                <strong>CUDA対応GPUとドライバ</strong><br>
+                CUDA 12.8対応のNVIDIA GPUが必要です。<br>
+                ドライバのバージョンは<a href="https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html" target="_blank" rel="noopener noreferrer">公式CUDAリリースノート</a>で確認してください。<br>
+                GPUの有無は「デバイスマネージャー」やコマンドプロンプトで <code>nvidia-smi</code> を実行して確認できます。
+            </li>
+            <li>
+                <strong>環境変数・パス設定の注意</strong><br>
+                PythonやGitの実行パスが通っているか確認してください。<br>
+                PowerShellやコマンドプロンプトで <code>python --version</code> や <code>git --version</code> を実行し、バージョンが表示されることが目安です。
+            </li>
+        </ul>
+    </section>
+    <section class="box">
+        <h2>2. Pythonおよびパッケージのインストール手順</h2>
+        <h3>Pythonのインストール</h3>
+        <p>
+            <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer">Python公式サイト</a>からWindows用インストーラをダウンロードし、インストールしてください。<br>
+            インストール時は「Add Python to PATH」を必ずチェックしてください。
+        </p>
+        <h3>pipのバージョン確認とアップデート</h3>
+        <pre>
+python -m pip --version
+python -m pip install --upgrade pip
+  </pre>
+        <h3>PyTorchのインストール例（CUDA 12.8）</h3>
+        <p>PyTorch公式サイトや社内資料を参照のうえインストールしてください。例：</p>
+        <pre>
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+  </pre>
+        <h3>その他の必要パッケージインストール</h3>
+        <pre>
+pip install numpy pandas matplotlib scikit-learn joblib tqdm
+  </pre>
+    </section>
+    <section class="box alt-bg">
+        <h2>3. フォルダ構造の説明</h2>
+        <ul>
+            <li><code>AnomalyDetectionModel_AE/</code> - ソースコード本体</li>
+            <li><code>datarecode_train/</code> - 学習用データCSVファイル</li>
+            <li><code>datarecode_test/</code> - 推論用テストデータCSVファイル</li>
+            <li><code>artifacts/transformer_ae/</code> - 学習成果物（モデル等）</li>
+            <li><code>result/</code> - 推論結果CSVおよびプロット画像</li>
+        </ul>
+    </section>
+    <section class="box">
+        <h2>4. 学習・推論それぞれの詳細手順</h2>
+        <h3>学習</h3>
+        <p>PowerShellを開き、リポジトリのルートフォルダに移動して以下を実行します。</p>
+        <pre>python train_transformer_autoencoder.py</pre>
+        <p>※学習データは <code>datarecode_train/</code> フォルダに配置してください。</p>
+        <p><strong>実行中のログ</strong>にはエポック数や損失が表示されます。途中で停止した場合はログのエラーメッセージを確認してください。</p>
+        <p><strong>実行時間の目安：</strong>環境やデータ量により数十分〜数時間かかる場合があります。</p>
+        <h3>推論</h3>
+        <p>同様にPowerShellで以下を実行します。</p>
+        <pre>python train_score_csv.py</pre>
+        <p>推論対象データは <code>datarecode_test/</code> フォルダに配置してください。</p>
+        <h3>推論結果のプロット</h3>
+        <pre>python plot_timechart.py</pre>
+    </section>
+    <section class="box alt-bg">
+        <h2>5. 成果物の説明と活用方法</h2>
+        <h3>学習成果物（<code>artifacts/transformer_ae/</code>）</h3>
+        <ul>
+            <li><code>model.pt</code> - 学習済みモデルファイル</li>
+            <li><code>config.json</code> - モデル設定・レイアウト情報</li>
+            <li><code>threshold.json</code> - 異常検知しきい値情報</li>
+            <li><code>scaler.pkl</code> - データ正規化用スケーラー</li>
+            <li><code>loss_curve.png</code> - 学習・検証損失の推移グラフ</li>
+        </ul>
+        <h3>推論成果物（<code>result/</code>）</h3>
+        <ul>
+            <li><code>ファイル名_anomaly.csv</code> - 推論結果CSV（Excelなどで開けます）</li>
+            <li><code>ファイル名_anomaly_timechart_transformer.png</code> - 推論結果の可視化画像</li>
+        </ul>
+    </section>
+    <section class="box">
+        <h2>6. よくあるエラーと対処方法</h2>
+        <h3>インストール時の依存関係エラー</h3>
+        <div class="errorbox">
+            Pythonパッケージのバージョン不整合やCUDAの不一致が原因です。<br>
+            エラーメッセージを参考にバージョンを合わせてください。
+        </div>
+        <h3>実行時のパスエラーやファイル不足</h3>
+        <div class="errorbox">
+            実行時はカレントディレクトリや必要なフォルダ・ファイルの存在を確認してください。
+        </div>
+        <h3>GPU利用時のドライバ問題</h3>
+        <div class="errorbox">
+            CUDA対応GPUのドライババージョンが古い場合があります。<br>
+            <code>nvidia-smi</code> で状態を確認し、必要に応じてドライバ更新してください。
+        </div>
+    </section>
+</body>
+</html>
