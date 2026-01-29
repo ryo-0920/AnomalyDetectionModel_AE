@@ -6,11 +6,18 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AE_transformer 実行マニュアル (2025/12/8時点)</title>
-    <link rel="stylesheet" href="style.css" />
+    <title>AE_transformer 実行マニュアル </title>
+    <link rel="stylesheet" href="pages/style.css" />
 </head>
 <body>
-    <h1>AE_transformer 実行マニュアル<br><small>2025/12/8時点</small></h1>
+    <nav class="navbar">
+        <a href="README.html">① 実行マニュアル</a>
+        <a href="pages/exec_flow.html">② 学習処理内容</a>
+        <a href="pages/score_flow.html">③ 推論処理内容</a>
+        <a href="pages/plot_flow.html">④ プロット処理内容</a>
+    </nav>
+    <hr>
+    <h1>AE Transformer 実行マニュアル<br><small>2026/1/29</small></h1>
     <section class="box important">
         <h2>1. 前提条件の明示</h2>
         <ul>
@@ -68,6 +75,7 @@ pip install numpy pandas matplotlib scikit-learn joblib tqdm
             <li><code>1_transformer/artifacts/transformer_ae/</code> - 学習成果物（モデル等）</li>
             <li><code>1_transformer/models/</code> - モデル定義や実装コード</li>
             <li><code>1_transformer/result/</code> - 推論結果CSVおよびプロット画像</li>
+            <li><code>pages/</code> - 説明資料用のHTMLファイルの格納先</li>
         </ul>
     </section>
     <section class="box">
