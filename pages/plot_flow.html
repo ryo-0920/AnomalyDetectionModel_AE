@@ -1,0 +1,205 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AE Transformer プロット処理（タイムチャート・フローチャート）</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <!-- ナビゲーション -->
+    <nav class="navbar">
+        <a href="../README.html">① 実行マニュアル</a>
+        <a href="exec_flow.html">② 学習処理内容</a>
+        <a href="score_flow.html">③ 推論処理内容</a>
+        <a href="plot_flow.html">④ プロット処理内容</a>
+    </nav>
+    <hr>
+    <h1>AE Transformer プロット処理（タイムチャート生成）<br><small>2026/1/29</small></h1>
+    <section class="box">
+        <h2>プロット処理フローチャート（処理内容＋対応関数）</h2>
+        <div class="flow-container">
+            <!-- 1列構成フローチャート -->
+            <svg class="flow-chart" xmlns="http://www.w3.org/2000/svg"
+                 viewBox="0 0 800 1550" preserveAspectRatio="xMidYMid meet" role="img" aria-label="プロット処理フロー図（1列）">
+                <defs>
+                    <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#005a9c" />
+                    </marker>
+                </defs>
+                <!-- 配置定義 -->
+                <!-- 1列: x=150, w=500, 中心xC=400 -->
+                <!-- 縦Y（各ブロック高さ=100、間隔=25）：20, 145, 270, 395, 520, 645, 770, 895, 1020, 1145, 1270, 1395 -->
+                <!-- Step 1 -->
+                <a xlink:href="#step1">
+                    <rect class="step-rect" x="150" y="20" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="45" fill="#005a9c">
+                        <tspan class="node-title">1) 実行開始・引数解析</tspan>
+                        <tspan x="165" dy="18" class="node-sub">--csv（ファイル/ディレクトリ/グロブ）を受付</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: parse_args(), argparse.ArgumentParser</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="120" x2="400" y2="145" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 2 -->
+                <a xlink:href="#step2">
+                    <rect class="step-rect" x="150" y="145" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="170" fill="#005a9c">
+                        <tspan class="node-title">2) 対象CSV列挙</tspan>
+                        <tspan x="165" dy="18" class="node-sub">グロブ/ディレクトリ/単一ファイルに応じて収集</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: gather_csv_list(), glob.glob()</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="245" x2="400" y2="270" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 3 -->
+                <a xlink:href="#step3">
+                    <rect class="step-rect" x="150" y="270" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="295" fill="#005a9c">
+                        <tspan class="node-title">3) 進行表示の初期化</tspan>
+                        <tspan x="165" dy="18" class="node-sub">1行上書き型ログ（端末幅で省略）</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: InlineLogger, short_name()</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="370" x2="400" y2="395" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 4 -->
+                <a xlink:href="#step4">
+                    <rect class="step-rect" x="150" y="395" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="420" fill="#005a9c">
+                        <tspan class="node-title">4) ファイル処理ループ開始</tspan>
+                        <tspan x="165" dy="18" class="node-sub">各CSVについて描画処理、成功/失敗集計</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: process_one(), try/exceptでエラー処理</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="495" x2="400" y2="520" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 5 -->
+                <a xlink:href="#step5">
+                    <rect class="step-rect" x="150" y="520" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="545" fill="#005a9c">
+                        <tspan class="node-title">5) CSV読み込み・列名正規化</tspan>
+                        <tspan x="165" dy="18" class="node-sub">存在確認→読み込み→小文字化・トリム</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: read_csv_to_df()</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="620" x2="400" y2="645" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 6 -->
+                <a xlink:href="#step6">
+                    <rect class="step-rect" x="150" y="645" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="670" fill="#005a9c">
+                        <tspan class="node-title">6) 時間軸の取得</tspan>
+                        <tspan x="165" dy="18" class="node-sub">frame列があれば使用、なければインデックス</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: get_time_axis()</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="745" x2="400" y2="770" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 7 -->
+                <a xlink:href="#step7">
+                    <rect class="step-rect" x="150" y="770" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="795" fill="#005a9c">
+                        <tspan class="node-title">7) シグナル抽出（カテゴリ順）</tspan>
+                        <tspan x="165" dy="18" class="node-sub">定義済CATEGORIESから存在列のみ抽出</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: collect_signals_by_category(), CATEGORIES</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="870" x2="400" y2="895" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 8 -->
+                <a xlink:href="#step8">
+                    <rect class="step-rect" x="150" y="895" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="920" fill="#005a9c">
+                        <tspan class="node-title">8) 図・軸の作成</tspan>
+                        <tspan x="165" dy="18" class="node-sub">シグナル数に応じて縦長のサブプロット生成</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: create_figure()</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="995" x2="400" y2="1020" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 9 -->
+                <a xlink:href="#step9">
+                    <rect class="step-rect" x="150" y="1020" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="1045" fill="#005a9c">
+                        <tspan class="node-title">9) 個別シグナルの描画</tspan>
+                        <tspan x="165" dy="18" class="node-sub">連続: 折れ線／離散: ステップ／anomalyは特別扱い</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: plot_single_signal()</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="1120" x2="400" y2="1145" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 10 -->
+                <a xlink:href="#step10">
+                    <rect class="step-rect" x="150" y="1145" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="1170" fill="#005a9c">
+                        <tspan class="node-title">10) 帯の重ね合わせ・注記</tspan>
+                        <tspan x="165" dy="18" class="node-sub">is_accel区間の帯・凡例重複整理・ON/OFF発生率</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: shade_accel_spans_on_axes(), shade_spans(), add_on_off_metrics_text()</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="1245" x2="400" y2="1270" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 11 -->
+                <a xlink:href="#step11">
+                    <rect class="step-rect" x="150" y="1270" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="1295" fill="#005a9c">
+                        <tspan class="node-title">11) 出力パス作成・保存</tspan>
+                        <tspan x="165" dy="18" class="node-sub">{元CSV名}_timechart_transformer.png を同ディレクトリへ</tspan>
+                        <tspan x="165" dy="16" class="node-func">関数: build_output_path(), save_figure()</tspan>
+                    </text>
+                </a>
+                <line x1="400" y1="1370" x2="400" y2="1395" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 12 -->
+                <a xlink:href="#step12">
+                    <rect class="step-rect" x="150" y="1395" width="500" height="100" rx="8" ry="8" />
+                    <text x="165" y="1420" fill="#005a9c">
+                        <tspan class="node-title">12) 集計・完了表示</tspan>
+                        <tspan x="165" dy="18" class="node-sub">成功/失敗件数を集計し、処理を終了</tspan>
+                        <tspan x="165" dy="16" class="node-func">要素: success/failed カウンタ, InlineLogger.newline()</tspan>
+                    </text>
+                </a>
+            </svg>
+        </div>
+    </section>
+    <!-- 詳細ステップ説明（プロット処理内容＋対応関数） -->
+    <section id="step1" class="box">
+        <h2>1) 実行開始・引数解析</h2>
+        <p>--csv 引数はファイル/ディレクトリ/グロブ（例: <code>result/*.csv</code>）を受け付けます（関数: <code>parse_args()</code>, <code>argparse.ArgumentParser</code>）。</p>
+    </section>
+    <section id="step2" class="box">
+        <h2>2) 対象CSV列挙</h2>
+        <p>指定がグロブなら <code>glob.glob()</code>、ディレクトリなら <code>*.csv</code> を収集、ファイルなら一件として扱います（関数: <code>gather_csv_list()</code>）。</p>
+    </section>
+    <section id="step3" class="box">
+        <h2>3) 進行表示の初期化</h2>
+        <p>端末幅を考慮して一行で進行表示を更新。ファイル名は <code>short_name()</code> で短縮します（関数: <code>InlineLogger</code>, <code>short_name()</code>）。</p>
+    </section>
+    <section id="step4" class="box">
+        <h2>4) ファイル処理ループ開始</h2>
+        <p>各CSVに対して可視化処理を実行し、成功/失敗を集計します。例外はメッセージを出してスキップします（関数: <code>process_one()</code>）。</p>
+    </section>
+    <section id="step5" class="box">
+        <h2>5) CSV読み込み・列名正規化</h2>
+        <p>CSVの存在確認後、読み込み。列名は小文字化＋前後空白除去を行います（関数: <code>read_csv_to_df()</code>）。</p>
+    </section>
+    <section id="step6" class="box">
+        <h2>6) 時間軸の取得</h2>
+        <p><code>frame</code> 列があればそれを時間軸に使用、なければ DataFrame のインデックスを用います（関数: <code>get_time_axis()</code>）。</p>
+    </section>
+    <section id="step7" class="box">
+        <h2>7) シグナル抽出（カテゴリ順）</h2>
+        <p>定義済みの <code>CATEGORIES</code> に従って、存在する列のみを順序通りに抽出して描画対象のシグナル一覧を作ります（関数: <code>collect_signals_by_category()</code>）。</p>
+    </section>
+    <section id="step8" class="box">
+        <h2>8) 図・軸の作成</h2>
+        <p>シグナル数に応じた縦長のサブプロット（共有x軸）を生成します（関数: <code>create_figure()</code>）。</p>
+    </section>
+    <section id="step9" class="box">
+        <h2>9) 個別シグナルの描画</h2>
+        <p>連続値は折れ線、離散値（<code>DISCRETE_SIGNALS</code>）はステップで描画。<code>anomaly</code> は0〜1の連続スコアとして特別扱いします（関数: <code>plot_single_signal()</code>）。</p>
+    </section>
+    <section id="step10" class="box">
+        <h2>10) 帯の重ね合わせ・注記</h2>
+        <p><code>is_accel</code> があれば全軸に加速区間の帯を重畳し、凡例の重複を整理。さらにON/OFFの異常率を最上段に注記します（関数: <code>shade_accel_spans_on_axes()</code>, <code>shade_spans()</code>, <code>add_on_off_metrics_text()</code>）。</p>
+    </section>
+    <section id="step11" class="box">
+        <h2>11) 出力パス作成・保存</h2>
+        <p>元CSVと同ディレクトリに <code>{元ファイル名}_timechart_transformer.png</code> を保存します（関数: <code>build_output_path()</code>, <code>save_figure()</code>）。</p>
+    </section>
+    <section id="step12" class="box">
+        <h2>12) 集計・完了表示</h2>
+        <p>成功/失敗件数を集計し、最終的なメッセージを出力します。</p>
+    </section>
+</body>
+</html>
