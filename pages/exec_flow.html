@@ -1,0 +1,211 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AE Transformer 実行順（処理内容順＋関数名・2列フローチャート）</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <!-- ナビゲーション -->
+    <nav class="navbar">
+        <a href="../README.html">① 実行マニュアル</a>
+        <a href="exec_flow.html">② 学習処理内容</a>
+        <a href="score_flow.html">③ 推論処理内容</a>
+        <a href="plot_flow.html">④ プロット処理内容</a>
+    </nav>
+    <hr>
+    <h1>AE Transformer 学習処理（学習パイプライン）<br><small>2026/1/29</small></h1>
+    <section class="box">
+        <h2>全体処理フローチャート（処理内容＋対応関数）</h2>
+        <div class="flow-container">
+            <!-- 2列構成フローチャート。左列: Step1-6 / 右列: Step7-12 -->
+            <svg class="flow-chart" xmlns="http://www.w3.org/2000/svg"
+                 viewBox="0 0 1200 900" preserveAspectRatio="xMidYMid meet" role="img" aria-label="処理フロー図">
+                <defs>
+                    <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#005a9c" />
+                    </marker>
+                </defs>
+                <!-- 左列: xL=40, w=500, 中心xLC=290 / 右列: xR=660, w=500, 中心xRC=910 -->
+                <!-- 左列の縦Y（各ブロック高さ=100、間隔=25）：20, 145, 270, 395, 520, 645 -->
+                <!-- 右列の縦Y（各ブロック高さ=100、間隔=125）：Step7=95（Step1とStep2の間に配置）, 220, 345, 470, 595, 720 -->
+                <!-- 左列 Step1-6 -->
+                <!-- Step 1 -->
+                <a xlink:href="#step1">
+                    <rect class="step-rect" x="40" y="20" width="500" height="100" rx="8" ry="8" />
+                    <text x="55" y="45" fill="#005a9c">
+                        <tspan class="node-title">1) 実行開始</tspan>
+                        <tspan x="55" dy="18" class="node-sub">エントリポイント起動・初期ログ</tspan>
+                        <tspan x="55" dy="16" class="node-func">関数: main()</tspan>
+                    </text>
+                </a>
+                <line x1="290" y1="120" x2="290" y2="145" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 2 -->
+                <a xlink:href="#step2">
+                    <rect class="step-rect" x="40" y="145" width="500" height="100" rx="8" ry="8" />
+                    <text x="55" y="170" fill="#005a9c">
+                        <tspan class="node-title">2) 入力解決と基本設定</tspan>
+                        <tspan x="55" dy="18" class="node-sub">引数解析・パス/パターン決定・ハイパラ組み立て</tspan>
+                        <tspan x="55" dy="16" class="node-func">関数: argparse（標準）／設定集約: SimpleNamespace</tspan>
+                    </text>
+                </a>
+                <line x1="290" y1="245" x2="290" y2="270" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 3 -->
+                <a xlink:href="#step3">
+                    <rect class="step-rect" x="40" y="270" width="500" height="100" rx="8" ry="8" />
+                    <text x="55" y="295" fill="#005a9c">
+                        <tspan class="node-title">3) 実行環境の初期化</tspan>
+                        <tspan x="55" dy="18" class="node-sub">デバイス/AMP/シード/SDPAの設定</tspan>
+                        <tspan x="55" dy="16" class="node-func">関数: resolve_device(), resolve_amp_dtype(), set_global_seed()</tspan>
+                        <tspan x="55" dy="16" class="node-func">他: torch.backends.cuda.sdp_kernel(...), torch.compile(条件付き)</tspan>
+                    </text>
+                </a>
+                <line x1="290" y1="370" x2="290" y2="395" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 4 -->
+                <a xlink:href="#step4">
+                    <rect class="step-rect" x="40" y="395" width="500" height="100" rx="8" ry="8" />
+                    <text x="55" y="420" fill="#005a9c">
+                        <tspan class="node-title">4) CSV読み込みと検証</tspan>
+                        <tspan x="55" dy="18" class="node-sub">列名正規化・必須カラム確認・欠損行除去(必要時)</tspan>
+                        <tspan x="55" dy="16" class="node-func">関数: read_csv_lower(), require_columns(), drop_rows_with_missing_features()</tspan>
+                    </text>
+                </a>
+                <line x1="290" y1="495" x2="290" y2="520" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 5 -->
+                <a xlink:href="#step5">
+                    <rect class="step-rect" x="40" y="520" width="500" height="100" rx="8" ry="8" />
+                    <text x="55" y="545" fill="#005a9c">
+                        <tspan class="node-title">5) カテゴリ値の数値化</tspan>
+                        <tspan x="55" dy="18" class="node-sub">CATEGORY_MAPS に基づくID化（UNKNOWN含む）</tspan>
+                        <tspan x="55" dy="16" class="node-func">関数: apply_categorical_mapping()</tspan>
+                    </text>
+                </a>
+                <line x1="290" y1="620" x2="290" y2="645" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 6 -->
+                <a xlink:href="#step6">
+                    <rect class="step-rect" x="40" y="645" width="500" height="100" rx="8" ry="8" />
+                    <text x="55" y="670" fill="#005a9c">
+                        <tspan class="node-title">6) 欠損・番兵・外れ値の処理</tspan>
+                        <tspan x="55" dy="18" class="node-sub">マスキング→補間→クリップ（FEATURE_RULES）</tspan>
+                        <tspan x="55" dy="16" class="node-func">関数: clean_and_mask_by_rules()</tspan>
+                    </text>
+                </a>
+                <!-- 右列 Step7-12（Step7をStep1とStep2の間に配置） -->
+                <!-- Step 7 -->
+                <a xlink:href="#step7">
+                    <rect class="step-rect" x="660" y="95" width="500" height="100" rx="8" ry="8" />
+                    <text x="675" y="120" fill="#005a9c">
+                        <tspan class="node-title">7) 正規化・One-hot・マスク展開</tspan>
+                        <tspan x="675" dy="18" class="node-sub">StandardScaler / one-hot / mask拡張 → 特徴行列</tspan>
+                        <tspan x="675" dy="16" class="node-func">関数: onehot_encode_df(), expand_mask_for_onehot(), StandardScaler.fit/transform()</tspan>
+                    </text>
+                </a>
+                <line x1="910" y1="195" x2="910" y2="220" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 8 -->
+                <a xlink:href="#step8">
+                    <rect class="step-rect" x="660" y="220" width="500" height="100" rx="8" ry="8" />
+                    <text x="675" y="245" fill="#005a9c">
+                        <tspan class="node-title">8) データセット構築と分割</tspan>
+                        <tspan x="675" dy="18" class="node-sub">時系列ウィンドウ化・train/val 分割（ギャップ考慮）</tspan>
+                        <tspan x="675" dy="16" class="node-func">関数: SequenceDatasetMasked(/Segments), split_segments() / split_timewise_with_gap()</tspan>
+                    </text>
+                </a>
+                <line x1="910" y1="320" x2="910" y2="345" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 9 -->
+                <a xlink:href="#step9">
+                    <rect class="step-rect" x="660" y="345" width="500" height="100" rx="8" ry="8" />
+                    <text x="675" y="370" fill="#005a9c">
+                        <tspan class="node-title">9) モデル/最適化/ローダ/スケジューラ</tspan>
+                        <tspan x="675" dy="18" class="node-sub">AE構築・AdamW・OneCycleLR・DataLoader準備</tspan>
+                        <tspan x="675" dy="16" class="node-func">関数: build_model_and_optim(), build_loader(), torch.optim.lr_scheduler.OneCycleLR</tspan>
+                    </text>
+                </a>
+                <line x1="910" y1="445" x2="910" y2="470" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 10 -->
+                <a xlink:href="#step10">
+                    <rect class="step-rect" x="660" y="470" width="500" height="100" rx="8" ry="8" />
+                    <text x="675" y="495" fill="#005a9c">
+                        <tspan class="node-title">10) 学習ループ</tspan>
+                        <tspan x="675" dy="18" class="node-sub">訓練・検証・損失ログ・ベスト更新・損失曲線保存</tspan>
+                        <tspan x="675" dy="16" class="node-func">関数: train_one_epoch(), eval_one_epoch(), save_loss_curve()</tspan>
+                    </text>
+                </a>
+                <line x1="910" y1="570" x2="910" y2="595" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 11 -->
+                <a xlink:href="#step11">
+                    <rect class="step-rect" x="660" y="595" width="500" height="100" rx="8" ry="8" />
+                    <text x="675" y="620" fill="#005a9c">
+                        <tspan class="node-title">11) 閾値算出（MAE分布）</tspan>
+                        <tspan x="675" dy="18" class="node-sub">連続特徴のみでMAE分布→分位点で閾値決定</tspan>
+                        <tspan x="675" dy="16" class="node-func">関数: compute_threshold_on_dataset(), collect_mae_distribution(), compute_batch_mae_last()</tspan>
+                    </text>
+                </a>
+                <line x1="910" y1="695" x2="910" y2="720" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+                <!-- Step 12 -->
+                <a xlink:href="#step12">
+                    <rect class="step-rect" x="660" y="720" width="500" height="100" rx="8" ry="8" />
+                    <text x="675" y="745" fill="#005a9c">
+                        <tspan class="node-title">12) 成果物保存と結果表示</tspan>
+                        <tspan x="675" dy="18" class="node-sub">モデル/閾値/設定/スケーラ保存・コンソールに統計表示</tspan>
+                        <tspan x="675" dy="16" class="node-func">関数: save_artifacts()、表示は main() 内の print</tspan>
+                    </text>
+                </a>
+                <!-- 列間の接続矢印（Step6 -> Step7） -->
+                <!-- 左列Step6（中心 290, 下端 745）から列間ギャップ(x=600)を経由し、Step7左辺中央(660,145)へ水平接続 -->
+                <polyline points="290,745 600,745 600,145 660,145"
+                          fill="none" stroke="#005a9c" stroke-width="2" marker-end="url(#arrowhead-blue)" />
+            </svg>
+        </div>
+    </section>
+    <!-- 詳細ステップ説明（処理内容順＋対応関数） -->
+    <section id="step1" class="box">
+        <h2>1) 実行開始</h2>
+        <p>エントリポイントから全体の制御を開始します（関数: <code>main()</code>）。ログや出力先の準備などもここで行います。</p>
+    </section>
+    <section id="step2" class="box">
+        <h2>2) 入力解決と基本設定</h2>
+        <p>コマンドライン引数を解析し、CSVの場所やファイルパターン、ハイパラ群を決定します（関数: <code>argparse</code>、設定集約: <code>SimpleNamespace</code>）。</p>
+    </section>
+    <section id="step3" class="box">
+        <h2>3) 実行環境の初期化</h2>
+        <p>実行デバイス（CPU/GPU）の確定、AMP（bf16/fp16）の有効化、乱数シード固定、必要に応じてSDPA（Flash/MemEfficient）を有効化します（関数: <code>resolve_device()</code>, <code>resolve_amp_dtype()</code>, <code>set_global_seed()</code>）。</p>
+    </section>
+    <section id="step4" class="box">
+        <h2>4) CSV読み込みと検証</h2>
+        <p>CSVの列名を小文字化し、必須カラム（FEATURES）を確認。必要であれば完全欠損行を除去します（関数: <code>read_csv_lower()</code>, <code>require_columns()</code>, <code>drop_rows_with_missing_features()</code>）。</p>
+    </section>
+    <section id="step5" class="box">
+        <h2>5) カテゴリ値の数値化</h2>
+        <p><code>CATEGORY_MAPS</code> に基づきカテゴリ値を数値IDへ変換します（関数: <code>apply_categorical_mapping()</code>）。</p>
+    </section>
+    <section id="step6" class="box">
+        <h2>6) 欠損・番兵・外れ値の処理</h2>
+        <p><code>FEATURE_RULES</code> に従って番兵値・外れ値・NaNをマスクし、線形補間/前値補完し、必要に応じてクリップします（関数: <code>clean_and_mask_by_rules()</code>）。</p>
+    </section>
+    <section id="step7" class="box">
+        <h2>7) 正規化・One-hot・マスク展開</h2>
+        <p>連続値は <code>StandardScaler</code> で標準化、カテゴリ値は one-hot。欠損マスクは one-hot 次元にも展開します（関数: <code>onehot_encode_df()</code>, <code>expand_mask_for_onehot()</code>）。</p>
+    </section>
+    <section id="step8" class="box">
+        <h2>8) データセット構築と分割</h2>
+        <p>時系列ウィンドウを切り出し、セグメント/時間に応じて train/val に分割（ギャップあり）します（関数: <code>SequenceDatasetMasked</code>/<code>SequenceDatasetMaskedSegments</code>, <code>split_segments()</code>/<code>split_timewise_with_gap()</code>）。</p>
+    </section>
+    <section id="step9" class="box">
+        <h2>9) モデル/最適化/ローダ/スケジューラ</h2>
+        <p>AEモデル初期化（可能なら <code>torch.compile</code>）、AdamW 最適化器、OneCycleLR スケジューラ、DataLoader を準備します（関数: <code>build_model_and_optim()</code>, <code>build_loader()</code>）。</p>
+    </section>
+    <section id="step10" class="box">
+        <h2>10) 学習ループ</h2>
+        <p>訓練/検証を回し、損失ログ・ベスト更新・損失曲線保存を行います（関数: <code>train_one_epoch()</code>, <code>eval_one_epoch()</code>, <code>save_loss_curve()</code>）。</p>
+    </section>
+    <section id="step11" class="box">
+        <h2>11) 閾値算出（MAE分布）</h2>
+        <p>連続特徴のみのMAE分布を収集し、分位点（例: 99.5%）から閾値を決定します（関数: <code>compute_threshold_on_dataset()</code>, <code>collect_mae_distribution()</code>, <code>compute_batch_mae_last()</code>）。</p>
+    </section>
+    <section id="step12" class="box">
+        <h2>12) 成果物保存と結果表示</h2>
+        <p>モデル/閾値/設定/スケーラを保存し、コンソールで統計を表示します（関数: <code>save_artifacts()</code>、表示は <code>main()</code> 内の <code>print</code>）。</p>
+    </section>
+</body>
+</html>

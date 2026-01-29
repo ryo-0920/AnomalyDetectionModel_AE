@@ -1,0 +1,198 @@
+﻿/* 共通スタイルテンプレート */
+body {
+    font-family: "Yu Gothic", "Hiragino Kaku Gothic Pro", Meiryo, sans-serif;
+    background: #f9f9f9;
+    color: #333;
+    line-height: 1.6;
+    margin: 0;
+    padding: 20px;
+}
+
+h1, h2, h3 {
+    color: #005a9c;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    font-weight: bold;
+}
+
+h1 {
+    border-bottom: 3px solid #005a9c;
+    padding-bottom: 0.3em;
+}
+
+a {
+    color: #007acc;
+    text-decoration: none;
+    background-color: #dbe9ff;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: background-color 0.3s ease;
+}
+
+    a:hover {
+        text-decoration: underline;
+        background-color: #a6c8ff;
+    }
+/* セクションの箱デザイン */
+section.box {
+    background: #ffffff !important;
+    border: 2px solid #005a9c;
+    border-radius: 10px;
+    padding: 15px 20px; /* 内側余白を少し減らす */
+    margin-bottom: 1.5em; /* 枠間余白も減らす */
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+    /* alt-bgクラスも白背景で統一 */
+    section.box.alt-bg {
+        background: #ffffff !important;
+        border-color: #005a9c !important;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+    }
+/* コードブロック（pre） */
+pre {
+    background: #272822;
+    color: #f8f8f2;
+    padding: 18px 24px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.95em;
+    line-height: 1.5;
+    margin: 1em 0;
+    font-family: Consolas, monospace;
+}
+/* リスト調整 */
+ul {
+    padding-left: 1.5em;
+}
+
+li {
+    margin-bottom: 0.6em;
+}
+/* インラインコード */
+code {
+    background: #eee;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-family: Consolas, monospace;
+    font-size: 0.95em;
+}
+/* エラー表示ボックス */
+.errorbox {
+    background-color: #ffe6e6;
+    border-left: 6px solid #d9534f;
+    padding: 16px 20px;
+    margin: 1em 0 1.5em 0;
+    border-radius: 8px;
+    color: #a94442;
+    font-weight: 700;
+    font-size: 1em;
+}
+/* ナビゲーション */
+.navbar {
+    background-color: #005a9c;
+    padding: 8px;
+}
+
+    .navbar a {
+        color: white;
+        background-color: transparent;
+        padding: 8px 12px;
+        margin-right: 4px;
+        border-radius: 4px;
+        transition: background-color 0.3s ease;
+        white-space: nowrap; /* 追記：折返し防止 */
+    }
+
+        .navbar a:hover {
+            background-color: rgba(255,255,255,0.2);
+        }
+/* 区切り線 */
+hr {
+    border: none;
+    border-top: 2px solid #ccc;
+    margin: 0;
+}
+/* フローチャート（SVG） */
+svg.flow-chart {
+    width: 100%; /* 追記：明示的に幅100% */
+    max-width: 100%;
+    height: 74vh; /* 上書き：高さをビューポート基準に */
+    display: block; /* 追記：ブロック要素化 */
+}
+
+    svg.flow-chart rect {
+        fill: #dbe9ff;
+        stroke: #005a9c;
+        stroke-width: 2;
+    }
+
+    svg.flow-chart text {
+        font-size: 14px;
+        fill: #005a9c;
+        font-weight: bold;
+    }
+
+    svg.flow-chart line {
+        stroke: #005a9c;
+        stroke-width: 2;
+    }
+
+    svg.flow-chart polygon {
+        fill: #005a9c;
+    }
+/* フローチャート用の補助クラス（HTML内で使用） */
+.node-title {
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.node-sub {
+    font-size: 12px;
+}
+
+.node-func {
+    font-size: 11px;
+    fill: #2f6fad;
+}
+/* 角丸矩形用クラス
+   注記：rx/ryはSVG属性として指定するのが確実です。CSSとして指定できない環境もあるため、
+   必要に応じて <rect ... rx="8" ry="8"> としてください。 */
+.step-rect {
+    fill: #dbe9ff;
+    stroke: #005a9c;
+    stroke-width: 2;
+    /* rx: 8; ry: 8;  ← 属性での指定推奨 */
+}
+/* フローチャートコンテナ（スクロール/背景） */
+.flow-container {
+    width: 100%;
+    max-width: 100%;
+    overflow: auto; /* 必要に応じて水平/垂直スクロール */
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    background: #fafbff;
+    padding: 8px;
+}
+/* セクションのオーバーフロー許可（フローチャートが切れないように） */
+.box {
+    overflow: visible;
+}
+/* 小見出しのサブ情報（h1内のsmall） */
+h1 small {
+    font-weight: normal;
+    font-size: 60%;
+    color: #666;
+}
+/* レイアウト・スクロール補助（グローバル） */
+html, body {
+    height: 100%;
+    min-height: 100%;
+    overflow-y: auto; /* ページ縦スクロールを許可 */
+    overflow-x: hidden; /* 横スクロールは基本禁止（必要時はコンテナで許可） */
+    box-sizing: border-box;
+}
+
+* {
+    box-sizing: inherit;
+}
