@@ -1,5 +1,4 @@
-﻿<!--HTMLファイルで手順書を作成しているため、コードをダウンロードして
-　　本ファイルを実行して手順を確認してください -->
+﻿<!--HTMLファイルで手順書を作成しているため、ブラウザで開いて内容を確認してください。 -->
 
 <!DOCTYPE html>
 <html lang="ja">
@@ -17,7 +16,7 @@
         <a href="pages/plot_flow.html">④ プロット処理内容</a>
     </nav>
     <hr>
-    <h1>AE Transformer 実行マニュアル<br><small>2026/1/29</small></h1>
+    <h1>AE Transformer 実行マニュアル<br><small>2026/4/15</small></h1>
     <section class="box important">
         <h2>1. 前提条件の明示</h2>
         <ul>
@@ -66,32 +65,55 @@ pip install numpy pandas matplotlib scikit-learn joblib tqdm
   </pre>
     </section>
     <section class="box alt-bg">
-        <h2>3. フォルダ構造の説明</h2>
+        <h2>3. 現行フォルダ構造の説明</h2>
         <ul>
-            <li><code>AnomalyDetectionModel_AE/</code> - ソースコード本体</li>
-            <li><code>datarecode_train/</code> - 学習用データCSVファイル</li>
-            <li><code>datarecode_test/</code> - 推論用テストデータCSVファイル</li>
-            <li><code>1_transformer/</code> - Transformerを使用したソースコード</li>
-            <li><code>1_transformer/artifacts/transformer_ae/</code> - 学習成果物（モデル等）</li>
-            <li><code>1_transformer/models/</code> - モデル定義や実装コード</li>
-            <li><code>1_transformer/result/</code> - 推論結果CSVおよびプロット画像</li>
-            <li><code>pages/</code> - 説明資料用のHTMLファイルの格納先</li>
+            <li><code>AE/</code> - 現在のリポジトリルートです。</li>
+            <li><code>README.html</code> - 本マニュアルです。</li>
+            <li><code>pages/</code> - 補足説明用のHTMLファイルとスタイルシートです。</li>
+            <li><code>1_transformer/</code> - 学習・推論・プロットの主な実行スクリプトがある作業ディレクトリです。</li>
+            <li><code>1_transformer/models/</code> - Transformer Autoencoder のモデル定義があります。</li>
+            <li><code>1_transformer/artifacts/transformer_ae/</code> - 学習済みモデル、設定、しきい値、スケーラー、学習曲線を保存します。</li>
+            <li><code>1_transformer/result/</code> - 推論結果CSVと時系列プロット画像の出力先です。</li>
+            <li><code>datarecode_train/</code> - 学習用CSVの配置先です。</li>
+            <li><code>datarecode_test/</code> - 推論用CSVの配置先です。</li>
+            <li><code>collect_intentional_accel.py</code> / <code>export_results_excel.py</code> / <code>gofumi_accel_keyboard.py</code> / <code>pngtovideo.py</code> - 必要に応じて使う補助スクリプトです。</li>
         </ul>
     </section>
     <section class="box">
         <h2>4. 学習・推論それぞれの詳細手順</h2>
         <h3>学習</h3>
-        <p>PowerShellを開き、リポジトリのルートフォルダに移動して以下を実行します。</p>
-        <pre>python train_transformer_autoencoder.py</pre>
-        <p>※学習データは <code>datarecode_train/</code> フォルダに配置してください。</p>
+        <p>PowerShellを開き、まず <code>1_transformer/</code> に移動してから学習を実行してください。</p>
+        <pre>
+cd 1_transformer
+python train_transformer_autoencoder.py
+        </pre>
+        <p>既定では <code>..\datarecode_train</code> を学習データとして参照します。別のフォルダを使う場合は <code>--csvdir</code> または <code>--csv</code> を指定してください。</p>
+        <pre>
+python train_transformer_autoencoder.py --csvdir ..\datarecode_train
+python train_transformer_autoencoder.py --csv ..\datarecode_train\sample.csv
+        </pre>
         <p><strong>実行中のログ</strong>にはエポック数や損失が表示されます。途中で停止した場合はログのエラーメッセージを確認してください。</p>
-        <p><strong>実行時間の目安：</strong>環境やデータ量により数十分〜数時間かかる場合があります。</p>
+        <p><strong>出力先：</strong><code>1_transformer/artifacts/transformer_ae/</code></p>
+        <p><strong>実行時間の目安：</strong>環境やデータ量により数十分から数時間かかる場合があります。</p>
         <h3>推論</h3>
-        <p>同様にPowerShellで以下を実行します。</p>
-        <pre>python train_score_csv.py</pre>
-        <p>推論対象データは <code>datarecode_test/</code> フォルダに配置してください。</p>
+        <p>学習完了後、同じく <code>1_transformer/</code> で推論を実行します。</p>
+        <pre>
+cd 1_transformer
+python train_score_csv.py
+        </pre>
+        <p>既定では <code>..\datarecode_test</code> を推論対象として参照し、学習済み成果物は <code>artifacts/transformer_ae</code> から読み込みます。</p>
+        <pre>
+python train_score_csv.py --csv ..\datarecode_test
+python train_score_csv.py --csv ..\datarecode_test --artifacts_dir artifacts\transformer_ae
+        </pre>
+        <p><strong>出力先：</strong><code>1_transformer/result/</code></p>
         <h3>推論結果のプロット</h3>
-        <pre>python plot_timechart.py</pre>
+        <pre>
+cd 1_transformer
+python plot_timechart.py
+        </pre>
+        <p>既定では <code>result</code> 配下の異常度CSVを読み込み、同じ <code>result/</code> に時系列プロットPNGを保存します。</p>
+        <pre>python plot_timechart.py --csv result</pre>
     </section>
     <section class="box alt-bg">
         <h2>5. 成果物の説明と活用方法</h2>
@@ -101,12 +123,12 @@ pip install numpy pandas matplotlib scikit-learn joblib tqdm
             <li><code>config.json</code> - モデル設定・レイアウト情報</li>
             <li><code>threshold.json</code> - 異常検知しきい値情報</li>
             <li><code>scaler.pkl</code> - データ正規化用スケーラー</li>
-            <li><code>loss_curve.png</code> - 学習・検証損失の推移グラフ</li>
+            <li><code>loss_curve.png</code> - 学習・検証損失の推移グラフです。</li>
         </ul>
         <h3>推論成果物（<code>result/</code>）</h3>
         <ul>
-            <li><code>ファイル名_anomaly.csv</code> - 推論結果CSV（Excelなどで開けます）</li>
-            <li><code>ファイル名_anomaly_timechart_transformer.png</code> - 推論結果の可視化画像</li>
+            <li><code>ファイル名_anomaly.csv</code> - 各時刻の異常スコア、誤差、異常判定、異常レベルを含むCSVです。</li>
+            <li><code>ファイル名_timechart_transformer.png</code> - 推論結果を重ねた時系列プロット画像です。</li>
         </ul>
     </section>
     <section class="box">
@@ -118,12 +140,18 @@ pip install numpy pandas matplotlib scikit-learn joblib tqdm
         </div>
         <h3>実行時のパスエラーやファイル不足</h3>
         <div class="errorbox">
-            実行時はカレントディレクトリや必要なフォルダ・ファイルの存在を確認してください。
+            学習・推論・プロットは <code>1_transformer/</code> に移動してから実行してください。<br>
+            別の場所から実行すると、<code>models</code> モジュールや <code>..\datarecode_train</code> / <code>..\datarecode_test</code> の相対パスが見つからない場合があります。
         </div>
         <h3>GPU利用時のドライバ問題</h3>
         <div class="errorbox">
             CUDA対応GPUのドライババージョンが古い場合があります。<br>
             <code>nvidia-smi</code> で状態を確認し、必要に応じてドライバ更新してください。
+        </div>
+        <h3>成果物フォルダが見つからない場合</h3>
+        <div class="errorbox">
+            推論時は <code>artifacts/transformer_ae/</code> に <code>model.pt</code>、<code>config.json</code>、<code>threshold.json</code>、<code>scaler.pkl</code> が必要です。<br>
+            先に学習を実行し、成果物が保存されていることを確認してください。
         </div>
     </section>
 </body>
