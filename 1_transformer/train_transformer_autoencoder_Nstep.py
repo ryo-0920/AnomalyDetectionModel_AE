@@ -30,7 +30,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.normpath(os.path.join(SCRIPT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-
 from app.ui.interactive import NETWORK_DATASET_DIRS
 from app.ui.interactive import TAGGED_DATASET_TOKEN
 from app.ui.interactive import prompt_optimizer, prompt_training_dataset
@@ -102,11 +101,8 @@ FEATURE_RULES.update({
     #"turnlampswitchstatus": {"interp": None, "clip": False},
     #"vsccontrol": {"interp": None, "clip": False},
 })
-
 TAGGED_FILTER_TRAIN_CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "tagged_dataset_filter_train.json")
 NETWORK_DATASET_DIRS_NORM = [os.path.normcase(os.path.normpath(p)) for p in NETWORK_DATASET_DIRS]
-
-
 def _is_network_path_or_child(path: str) -> bool:
     p_norm = os.path.normcase(os.path.normpath(path))
     for root in NETWORK_DATASET_DIRS_NORM:
@@ -190,18 +186,14 @@ def _seed_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed); random.seed(worker_seed)
 def _compile_model_if_possible(model: torch.nn.Module, use_compile: bool, device: str) -> torch.nn.Module:
-    # コンパイルを明示的に制御
     if not use_compile:
         return model
-    # CUDA環境でのみ試みる（CPUはcompileしてもメリットが薄い）
     if device != "cuda":
         return model
-    # Tritonがある場合のみ Inductor を試す。なければ aot_eager にフォールバック
     try:
-        import triton  # Windows では通常ここで ImportError
+        import triton
         return torch.compile(model, mode="max-autotune")
     except Exception:
-        # Inductor が使えない環境では aot_eager に切り替え（Triton不要）
         try:
             return torch.compile(model, backend="aot_eager")
         except Exception:
@@ -331,7 +323,7 @@ class SequenceDatasetMaskedSegments(Dataset):
         self.seg_names = list(names) if names is not None else [f"seg_{i}" for i in range(len(xs))]
         self.seg_win_counts: List[int] = []
         total = 0
-        self.cum: List[int] = [0]  # cum[k] = 先頭からセグメントk-1までのウィンドウ合計
+        self.cum: List[int] = [0]
         for s, (X, M) in enumerate(zip(xs, ms)):
             assert X.shape == M.shape, f"seg {s}: X と mask の形状が一致していません: {X.shape} != {M.shape}"
             n_w = max(0, X.shape[0] - seq_len + 1)
@@ -685,9 +677,8 @@ def train_one_epoch(model: torch.nn.Module, loader: DataLoader, opt: torch.optim
         l, b = train_one_batch(model, batch, opt, scaler, device, use_amp, grad_clip_max_norm=grad_clip_max_norm)
         total += l * b; count += b
         if sched is not None:
-            sched.step()  # バッチごとに LR 更新
+            sched.step()
         if use_bar:
-            # 現在LRを覗きたい場合（任意）
             try:
                 cur_lr = sched.get_last_lr()[0] if sched is not None else opt.param_groups[0]["lr"]
                 pbar.set_postfix(loss=f"{l:.4f}", avg=f"{(total/max(count,1)):.4f}", lr=f"{cur_lr:.2e}")
@@ -790,28 +781,37 @@ def train_on_dataset(dataset: Dataset, input_dim: int, seq_len: int, batch_size:
         optimizer_name=optimizer_name, loss_plot_path=loss_plot_path, grad_clip_max_norm=grad_clip_max_norm
     )
 # =========================================================
-# 評価（MAE 分布・閾値算出）
+# 評価（MAE 分布・閾値算出） tail_steps 対応
 # =========================================================
 @torch.no_grad()
-def compute_batch_mae_last(model, batch_x, batch_m, device, use_amp):
+def compute_batch_mae_tail(model, batch_x, batch_m, device, use_amp, tail_steps: int = 1):
+    batch_x = batch_x.to(device)
+    batch_m = batch_m.to(device)
     with amp_ctx(device, use_amp):
-        recon_last = model.reconstruct_last(batch_x)
-    last_true = batch_x[:, -1, :]
-    last_obs_mask = 1.0 - batch_m[:, -1, :]
-    mae = ((recon_last - last_true).abs() * last_obs_mask).sum(dim=1) / last_obs_mask.sum(dim=1).clamp(min=1.0)
+        recon_seq = model(batch_x)
+    B, T, D = recon_seq.shape
+    k = min(max(int(tail_steps), 1), T)
+    start = T - k
+    recon_tail = recon_seq[:, start:, :]
+    true_tail = batch_x[:, start:, :]
+    miss_tail = batch_m[:, start:, :]
+    obs_mask = 1.0 - miss_tail
+    abs_err = (recon_tail - true_tail).abs()
+    num_obs = obs_mask.sum(dim=(1, 2)).clamp(min=1.0)
+    mae = (abs_err * obs_mask).sum(dim=(1, 2)) / num_obs
     return mae.detach().cpu().numpy()
 @torch.no_grad()
-def collect_mae_distribution(model, loader, device, use_amp):
+def collect_mae_distribution(model, loader, device, use_amp, tail_steps: int = 1):
     model.eval(); errs = []
     for batch in loader:
         batch_x, batch_m = (batch[0], batch[1]) if not (isinstance(batch,(list,tuple)) and len(batch)==3) else (batch[0], batch[1])
         batch_x = batch_x.to(device, non_blocking=True); batch_m = batch_m.to(device, non_blocking=True)
-        errs.extend(compute_batch_mae_last(model, batch_x, batch_m, device, use_amp).tolist())
+        errs.extend(compute_batch_mae_tail(model, batch_x, batch_m, device, use_amp, tail_steps=tail_steps).tolist())
     return np.asarray(errs)
 @torch.no_grad()
-def compute_threshold_on_dataset(model, dataset, device, percentile=99.5, use_amp=False):
+def compute_threshold_on_dataset(model, dataset, device, percentile=99.5, use_amp=False, tail_steps: int = 1):
     dl = build_loader(dataset, device=device, batch_size=128, shuffle=False, drop_last=False)
-    errs_arr = collect_mae_distribution(model, dl, device, use_amp)
+    errs_arr = collect_mae_distribution(model, dl, device, use_amp, tail_steps=tail_steps)
     if errs_arr.size == 0:
         raise ValueError("MAE 分布が空です（学習データが不正の可能性）")
     mean = float(np.mean(errs_arr))
@@ -834,6 +834,7 @@ def compute_threshold_on_dataset(model, dataset, device, percentile=99.5, use_am
         "temperature": temperature,
         "n_samples": int(errs_arr.size),
         "score_policy": SCORE_POLICY,
+        "tail_steps": int(tail_steps),
     }
 # =========================================================
 # 成果物保存・ストリーミング推論・設定構築
@@ -849,7 +850,8 @@ def save_artifacts(out_dir: str, model: CausalTransformerAutoencoder, scaler: St
 @torch.no_grad()
 def stream_score_csv(csv_path: str, artifacts_dir: str, seq_len: int = 50) -> List[Dict]:
     """
-    推論時の MAE は「全特徴（連続 + one-hot）」で計算する（学習時の閾値定義と一致させる）。
+    推論時の MAE は「最後 tail_steps ステップ分」の
+    全特徴（連続 + one-hot）で計算する。
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     with open(os.path.join(artifacts_dir, "config.json"), "r", encoding="utf-8") as f:
@@ -861,11 +863,15 @@ def stream_score_csv(csv_path: str, artifacts_dir: str, seq_len: int = 50) -> Li
     CONTINUOUS_FEATURES = layout["continuous_features"]; CATEGORICAL_FEATURES = layout["categorical_features"]
     onehot_specs = layout["onehot_specs"]; offsets = layout["offsets"]; input_dim = layout["input_dim"]
     seq_len = int(cfg["seq_len"])
+    tail_steps = int(thr_info.get("tail_steps", 1))
+    if tail_steps < 1:
+        tail_steps = 1
     model = CausalTransformerAutoencoder(
         input_dim=input_dim, d_model=cfg["d_model"], nhead=cfg["nhead"], num_layers=cfg["num_layers"],
         dim_feedforward=cfg["dim_ff"], dropout=cfg["dropout"], max_len=seq_len,
     ).to(device)
     buf_norm: Deque[np.ndarray] = deque(maxlen=seq_len); buf_raw: Deque[np.ndarray] = deque(maxlen=seq_len)
+    buf_missing: Deque[np.ndarray] = deque(maxlen=seq_len)
     state = torch.load(os.path.join(artifacts_dir, "model.pt"), map_location=device); model.load_state_dict(state); model.eval()
     df_raw = read_csv_lower(csv_path); require_columns(df_raw, csv_path)
     df_raw = apply_categorical_mapping(df_raw); df_raw[FEATURES] = df_raw[FEATURES].apply(pd.to_numeric, errors="coerce")
@@ -888,12 +894,10 @@ def stream_score_csv(csv_path: str, artifacts_dir: str, seq_len: int = 50) -> Li
     results: List[Dict] = []
     for i in range(len(df_raw)):
         row = df_raw.iloc[i][FEATURES].to_numpy(dtype=np.float32)
-        # 欠損判定
         is_missing = np.zeros(len(FEATURES), dtype=np.float32)
         for j, v in enumerate(row):
             miss = (np.isnan(v) or float(v) in sentinels_map[j] or v < vmin[j] or v > vmax[j])
             is_missing[j] = 1.0 if miss else 0.0
-        # 欠損補完（前値、なければ scaler.mean / UNKNOWN）
         x_raw = row.copy(); prev = buf_raw[-1] if len(buf_raw) > 0 else None
         for j, f in enumerate(FEATURES):
             if is_missing[j] == 1.0:
@@ -904,7 +908,6 @@ def stream_score_csv(csv_path: str, artifacts_dir: str, seq_len: int = 50) -> Li
                         x_raw[j] = float(scaler.mean_[cont_idx_by_name[f]])
                     else:
                         x_raw[j] = float(CATEGORY_MAPS.get(f, {}).get("UNKNOWN", DEFAULT_UNKNOWN_ID))
-        # 正規化＋one-hot
         x_cont = x_raw[idx_cont].reshape(1, -1).astype(np.float32)
         x_cont_norm = scaler.transform(x_cont).reshape(-1).astype(np.float32)
         x_cat = np.zeros((total_cat_dim,), dtype=np.float32)
@@ -912,37 +915,52 @@ def stream_score_csv(csv_path: str, artifacts_dir: str, seq_len: int = 50) -> Li
             v2i = specs[col]["value_to_index"]; val = float(x_raw[cat_feature_idx[col]])
             idx = v2i.get(val, unknown_idx_by_col[col]); x_cat[offsets[col] + idx] = 1.0
         x_exp_norm = np.concatenate([x_cont_norm, x_cat], axis=0).astype(np.float32)
-        buf_raw.append(x_raw); buf_norm.append(x_exp_norm)
-        # ウォームアップ：学習と同じ seq_len が溜まるまでスコアは None
+        buf_raw.append(x_raw); buf_norm.append(x_exp_norm); buf_missing.append(is_missing)
         if len(buf_norm) < seq_len:
             results.append({"idx": i, "score": None, "is_anomaly": False})
             continue
-        # マスクの展開（one-hot 分へ）
-        mask_last_exp = expand_mask_for_onehot(is_missing.reshape(1, -1), idx_cont, specs, offsets)[0]
-        # 推論
+        miss_seq = np.stack(list(buf_missing))
+        mask_seq_exp = expand_mask_for_onehot(miss_seq, idx_cont, specs, offsets)
         seq = np.stack(list(buf_norm))
         seq_t = torch.from_numpy(seq).unsqueeze(0).to(device)
         with amp_ctx(device, use_amp=(device == "cuda")):
-            out = model.reconstruct_last(seq_t)[0]
-            recon_last = out.detach().float().cpu().numpy()
-        # 全特徴（連続 + one-hot）で MAE（学習時の閾値定義と一致）
-        last_true = seq[-1]
-        obs_mask = 1.0 - mask_last_exp
+            recon_seq = model(seq_t)[0]
+            recon_seq = recon_seq.detach().float().cpu().numpy()
+        T = seq_len
+        k = min(tail_steps, T)
+        start = T - k
+        true_tail = seq[start:, :]
+        recon_tail = recon_seq[start:, :]
+        mask_tail = mask_seq_exp[start:, :]
+        obs_mask = 1.0 - mask_tail
         denom = float(obs_mask.sum()) if obs_mask.sum() > 0 else 1.0
-        mae = float((np.abs(recon_last - last_true) * obs_mask).sum() / denom)
+        mae = float((np.abs(recon_tail - true_tail) * obs_mask).sum() / denom)
         results.append({
             "idx": i,
             "score": mae,
             "is_anomaly": mae > float(thr_info["threshold"]),
-            "missing_ratio_last": float(mask_last_exp.mean())
+            "missing_ratio_last": float(mask_tail[-1].mean())
         })
     return results
 def build_config(args: SimpleNamespace, layout: Dict[str, Any], metrics: Dict[str, Any], csv_paths: List[str]) -> Dict[str, Any]:
-    return {"features": FEATURES, "seq_len": args.seq_len, "d_model": args.d_model, "nhead": args.nhead,
-            "num_layers": args.num_layers, "dim_ff": args.dim_ff, "dropout": args.dropout, "metrics": metrics,
-            "feature_rules": convert_rules_for_json(FEATURE_RULES), "categorical_features": CATEGORICAL_FEATURES,
-            "category_maps": CATEGORY_MAPS, "layout": layout, "n_csvs": len(csv_paths), "csv_paths": csv_paths,
-            "score_policy": SCORE_POLICY}
+    return {
+        "features": FEATURES,
+        "seq_len": args.seq_len,
+        "d_model": args.d_model,
+        "nhead": args.nhead,
+        "num_layers": args.num_layers,
+        "dim_ff": args.dim_ff,
+        "dropout": args.dropout,
+        "metrics": metrics,
+        "feature_rules": convert_rules_for_json(FEATURE_RULES),
+        "categorical_features": CATEGORICAL_FEATURES,
+        "category_maps": CATEGORY_MAPS,
+        "layout": layout,
+        "n_csvs": len(csv_paths),
+        "csv_paths": csv_paths,
+        "score_policy": SCORE_POLICY,
+        "tail_steps": int(getattr(args, "tail_steps", 1)),
+    }
 def convert_rules_for_json(rules: dict) -> dict:
     def convert_value(v):
         if isinstance(v, (np.float32, np.float64)): return float(v)
@@ -983,7 +1001,6 @@ def main():
         help="Deprecated (ignored): interactive mode is always enabled",
     )
     a = parser.parse_args()
-    # 実行環境の自動判定（引数なしでOK）
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_amp = (device == "cuda")
     global amp_dtype
@@ -1010,6 +1027,7 @@ def main():
         "optimizer": "adamw",
         "random_seed": 42,
         "strict_deterministic": True,
+        "tail_steps": 1,
     }
     if a.hparams and os.path.isfile(a.hparams):
         try:
@@ -1034,7 +1052,6 @@ def main():
         print(f"[INFO] hparams file not found, built-in defaults are used: {a.hparams}")
     if a.no_dataset_prompt:
         print("[WARN] --no-dataset-prompt is ignored. Interactive mode is always enabled.")
-
     opt_default = str(hparams.get("optimizer", "adamw")).strip().lower()
     if opt_default not in {"adamw", "radam"}:
         print(f"[WARN] invalid optimizer '{opt_default}' in defaults/hparams -> use 'adamw'")
@@ -1042,7 +1059,6 @@ def main():
     selected_optimizer = prompt_optimizer(opt_default)
     hparams["optimizer"] = selected_optimizer
     print(f"[INFO] optimizer={selected_optimizer}")
-
     seed_value = int(a.seed) if a.seed is not None else int(hparams.get("random_seed", 42))
     current_dataset = a.csvdir if a.csvdir else a.csv
     selected_dataset = prompt_training_dataset(
@@ -1081,7 +1097,6 @@ def main():
     if torch.cuda.is_available():
         try:
             from torch.backends.cuda import sdp_kernel
-            # Flash と MemEfficient を有効（Mathを無効）に設定
             sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=False)
             print("[INFO] SDPA kernels: flash/mem_efficient enabled")
         except Exception as e:
@@ -1109,8 +1124,10 @@ def main():
         optimizer_name=args.optimizer, split_seed=int(args.seed),
         grad_clip_max_norm=float(args.grad_clip) if args.grad_clip is not None else float(args.max_norm),
     )
-    threshold_stats = compute_threshold_on_dataset(model=model, dataset=dataset, device=device,
-                                                   percentile=args.percentile, use_amp=use_amp)
+    threshold_stats = compute_threshold_on_dataset(
+        model=model, dataset=dataset, device=device,
+        percentile=args.percentile, use_amp=use_amp, tail_steps=int(args.tail_steps)
+    )
     print(f"Threshold (p{args.percentile}): {threshold_stats['threshold']:.6f} "
           f"(mean={threshold_stats['mean']:.6f}, std={threshold_stats['std']:.6f}, "
           f"p10={threshold_stats['p10']:.6f}, p99={threshold_stats['p99']:.6f})")

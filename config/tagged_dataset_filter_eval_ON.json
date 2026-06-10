@@ -1,0 +1,27 @@
+{
+  "enabled": true,
+  "evaluation": {
+    "run_dir": "..\\1_transformer\\result\\ON_pa99",
+    "label_review_sheet": {
+      "path": "C:\\Users\\Z628058\\トヨタ自動車株式会社\\4DAA6G_ファイル管理 - TMC+派遣\\10_市場データ管理台帳\\事故データ_Label\\202606_#3_namefix\\label_review_sheet‗202606_#3_add.xlsx",
+      "sheet_name": "label_review_sheet",
+      "file_column_excel_index": 19,
+      "a1_override_col": 9,
+      "k_col": 11,
+      "m_col": 13,
+      "n_col": 15,
+      "a1_delta_seconds": 5.0
+    },
+    "accel_column_name": "accelpedalangle",
+    "target_fpr": 0.01,
+    "a1_level": 1,
+    "file_prob_fallback": {
+      "enabled": false
+    },
+    "group_regex": "^([^_]+)",
+    "output": {
+      "evaluation_subdir": "evaluation",
+      "save_plots": true
+    }
+  }
+}

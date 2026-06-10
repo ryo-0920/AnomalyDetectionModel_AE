@@ -9,6 +9,13 @@ import sys
 import shutil
 import json
 import re
+from pathlib import Path
+# パス定義
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = (BASE_DIR / "..").resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from app.ui.interactive import ensure_tty, prompt_csv_or_dir_or_glob
 # カテゴリー定義（表示順はこの定義順に従う）
 CATEGORIES: List[Tuple[str, List[str]]] = [
     ("動き", ["speed", "accelerationfb","accelerationlr","steeringangle","angularvelocity"]),
@@ -238,7 +245,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--csv",
-        default="result",
+        default="1_transformer/result/ON_pa95",
         help=(
             "CSVファイル, ディレクトリ, もしくはグロブパターンを指定できます "
             "(例: --csv result, --csv result\\*.csv, --csv result\\foo.csv)"
@@ -248,9 +255,16 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    csv_list = gather_csv_list(args.csv)
+    ensure_tty()
+    csv_target = prompt_csv_or_dir_or_glob(
+        default_target=str(args.csv),
+        project_root=str(PROJECT_ROOT),
+        title="Select plot input target",
+    )
+    print(f"[INFO] csv_target={csv_target}")
+    csv_list = gather_csv_list(csv_target)
     if not csv_list:
-        raise FileNotFoundError(f"対象CSVが見つかりませんでした: {args.csv}")
+        raise FileNotFoundError(f"対象CSVが見つかりませんでした: {csv_target}")
     print(f"対象CSVファイル数: {len(csv_list)}")
     success, failed = 0, 0
     logger = InlineLogger()

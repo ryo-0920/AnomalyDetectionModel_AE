@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+02_20260213_dataset/
+datarecode_test/
+datarecode_train/
+artifacts/
+output/
+result/
+1_transformer/result/
+

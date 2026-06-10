@@ -68,15 +68,17 @@ pip install numpy pandas matplotlib scikit-learn joblib tqdm
         <h2>3. 現行フォルダ構造の説明</h2>
         <ul>
             <li><code>AE/</code> - 現在のリポジトリルートです。</li>
-            <li><code>README.html</code> - 本マニュアルです。</li>
-            <li><code>pages/</code> - 補足説明用のHTMLファイルとスタイルシートです。</li>
+            <li><code>docs/README.html</code> - 本マニュアルです。</li>
+            <li><code>docs/pages/</code> - 補足説明用のHTMLファイルとスタイルシートです。</li>
+            <li><code>app/</code> - 補助スクリプト群を配置するディレクトリです。</li>
+            <li><code>config/</code> - 共通設定（例: <code>hyperparams_common.json</code>）を管理するディレクトリです。</li>
             <li><code>1_transformer/</code> - 学習・推論・プロットの主な実行スクリプトがある作業ディレクトリです。</li>
             <li><code>1_transformer/models/</code> - Transformer Autoencoder のモデル定義があります。</li>
             <li><code>1_transformer/artifacts/transformer_ae/</code> - 学習済みモデル、設定、しきい値、スケーラー、学習曲線を保存します。</li>
             <li><code>1_transformer/result/</code> - 推論結果CSVと時系列プロット画像の出力先です。</li>
             <li><code>datarecode_train/</code> - 学習用CSVの配置先です。</li>
             <li><code>datarecode_test/</code> - 推論用CSVの配置先です。</li>
-            <li><code>collect_intentional_accel.py</code> / <code>export_results_excel.py</code> / <code>gofumi_accel_keyboard.py</code> / <code>pngtovideo.py</code> - 必要に応じて使う補助スクリプトです。</li>
+            <li><code>app/collect_intentional_accel.py</code> / <code>app/export_results_excel.py</code> / <code>app/gofumi_accel_keyboard.py</code> / <code>app/pngtovideo.py</code> - 必要に応じて使う補助スクリプトです。</li>
         </ul>
     </section>
     <section class="box">

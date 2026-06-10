@@ -1,8 +1,9 @@
 ﻿import argparse
+import datetime
 import json
 import os
 from collections import deque
-from typing import Any, Deque, Dict, List, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 from pathlib import Path
 import joblib
 import numpy as np
@@ -15,9 +16,33 @@ from models.transformer_autoencoder import CausalTransformerAutoencoder
 # 1) 定数・パス
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = (BASE_DIR / "..").resolve()
 DEFAULT_INPUT_DIR = (BASE_DIR / ".." / "datarecode_test").resolve()
+DEFAULT_HPARAMS_PATH = (PROJECT_ROOT / "config" / "hyperparams_common.json").resolve()
+DEFAULT_META_CSV_PATH = (PROJECT_ROOT / "config" / "inference_ground_truth.csv").resolve()
+DEFAULT_TAGGED_FILTER_INFER_PATH = (PROJECT_ROOT / "config" / "tagged_dataset_filter_infer.json").resolve()
+LEGACY_DEFAULT_ARTIFACTS_DIR = (PROJECT_ROOT / "artifacts" / "transformer_ae").resolve()
+DEFAULT_VALID_RESULTS_DIR = (PROJECT_ROOT / "output" / "Valid_results").resolve()
+MODEL_NAME = "transformer_ae"
 DEFAULT_UNKNOWN_ID = -1.0
 MAX_LOG_WIDTH = 70
+Y_PRE_EWMA_WINDOW = 5
+Y_PRE_THRESHOLD_SCALE = 0.6
+Y_PRE_CONSECUTIVE = 3
+REQUIRED_SCORE_POLICY = {
+    "mae_target": "all_features",
+    "feature_weights": {
+        "continuous": 1.0,
+        "categorical": 1.0,
+    },
+    "threshold_source": "full_training_dataset",
+    "legacy_compatibility": False,
+}
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from app.ui.interactive import TAGGED_DATASET_TOKEN
+from app.ui.interactive import ensure_tty, prompt_artifacts_dir, prompt_csv_or_dir_or_glob
+from app.tagged_dataset import build_tagged_dataset_csvs_from_config, sample_paths_interactively
 # =========================================================
 # 2) ユーティリティ（欠損マスク拡張・カテゴリ正規化・欠損行削除）
 # =========================================================
@@ -123,7 +148,29 @@ def load_artifacts(artifacts_dir: str) -> Tuple[Dict, Dict, "StandardScaler", Di
     scaler = joblib.load(scaler_path)
     paths = {"cfg_path": cfg_path, "thr_path": thr_path, "scaler_path": scaler_path, "model_path": model_path}
     return cfg, thr_info, scaler, paths
-    # コンパイル/DP 由来のプレフィックスを除去
+
+
+def resolve_default_artifacts_dir() -> str:
+    """
+    Prefer config/hyperparams_common.json:out_dir when available.
+    Fallback to legacy artifacts/transformer_ae.
+    """
+    if DEFAULT_HPARAMS_PATH.exists():
+        try:
+            with open(DEFAULT_HPARAMS_PATH, "r", encoding="utf-8-sig") as f:
+                hparams = json.load(f)
+            out_dir = hparams.get("out_dir", None)
+            if isinstance(out_dir, str) and out_dir.strip():
+                out_path = Path(out_dir.strip()).expanduser()
+                if not out_path.is_absolute():
+                    out_path = (PROJECT_ROOT / out_path).resolve()
+                return str(out_path)
+        except Exception:
+            pass
+    return str(LEGACY_DEFAULT_ARTIFACTS_DIR)
+
+
+# コンパイル/DP 由来のプレフィックスを除去
 def _strip_prefixes(sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     keys = list(sd.keys())
     # torch.compile: _orig_mod.
@@ -134,6 +181,43 @@ def _strip_prefixes(sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     if any(k.startswith("module.") for k in keys):
         sd = {k.replace("module.", ""): v for k, v in sd.items()}
     return sd
+
+
+def _normalize_score_policy(policy: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(policy, dict):
+        return None
+    weights = policy.get("feature_weights", {})
+    if not isinstance(weights, dict):
+        return None
+    try:
+        return {
+            "mae_target": str(policy.get("mae_target", "")).strip().lower(),
+            "feature_weights": {
+                "continuous": float(weights.get("continuous")),
+                "categorical": float(weights.get("categorical")),
+            },
+            "threshold_source": str(policy.get("threshold_source", "")).strip().lower(),
+            "legacy_compatibility": bool(policy.get("legacy_compatibility")),
+        }
+    except Exception:
+        return None
+
+
+def _validate_score_policy(cfg: Dict[str, Any], thr_info: Dict[str, Any]) -> Dict[str, Any]:
+    required = _normalize_score_policy(REQUIRED_SCORE_POLICY)
+    cfg_policy = _normalize_score_policy(cfg.get("score_policy"))
+    thr_policy = _normalize_score_policy(thr_info.get("score_policy"))
+    if cfg_policy is None or thr_policy is None:
+        raise ValueError(
+            "Artifacts are missing score_policy. Legacy artifacts are not supported. Please retrain and regenerate artifacts."
+        )
+    if cfg_policy != thr_policy:
+        raise ValueError(f"score_policy mismatch between config.json and threshold.json: cfg={cfg_policy}, thr={thr_policy}")
+    if cfg_policy != required:
+        raise ValueError(f"Unsupported score_policy: {cfg_policy}. Required: {required}")
+    return cfg_policy
+
+
 def build_inference_context(
     cfg: Dict,
     thr_info: Dict,
@@ -145,6 +229,7 @@ def build_inference_context(
     config と threshold 情報から、推論に必要な全前計算（モデル・one-hot仕様・ルール配列など）を構築して返す。
     戻り値はコンテキスト辞書。
     """
+    score_policy = _validate_score_policy(cfg, thr_info)
     # 基本レイアウト・設定
     features: List[str] = [c.lower() for c in cfg.get("features", [])]
     if not features:
@@ -223,6 +308,8 @@ def build_inference_context(
     p90 = float(thr_info.get("p90", mean + 2.0*std))
     p99 = float(thr_info.get("p99", mean + 3.0*std))
     temperature = float(thr_info.get("temperature", max((p90 - p50) / 6.0, 1e-6)))
+    y_conv_threshold = float(np.clip((threshold - p10) / max(p99 - p10, 1e-6), 0.0, 1.0))
+    y_pre_threshold = float(np.clip(y_conv_threshold * Y_PRE_THRESHOLD_SCALE, 0.0, 1.0))
     # コンテキスト辞書として返す
     return {
         "features": features,
@@ -248,42 +335,380 @@ def build_inference_context(
         "unknown_id_by_col": unknown_id_by_col,
         "unknown_idx_by_col": unknown_idx_by_col,
         "total_cat_dim": total_cat_dim,
-        "threshold": float(thr_info["threshold"]),
-        "mean": float(thr_info.get("mean", 0.0)),
-        "std": float(thr_info.get("std", 1.0)),
-        "p10": float(thr_info.get("p10", 0.0)),
-        "p50": float(thr_info.get("p50", 0.0)),
-        "p90": float(thr_info.get("p90", 0.0)),
-        "p99": float(thr_info.get("p99", 0.0)),
-        "temperature": float(thr_info.get("temperature", 1e-6)),
+        "threshold": threshold,
+        "mean": mean,
+        "std": std,
+        "p10": p10,
+        "p50": p50,
+        "p90": p90,
+        "p99": p99,
+        "temperature": temperature,
+        "y_conv_threshold": y_conv_threshold,
+        "y_pre_threshold": y_pre_threshold,
+        "y_pre_ewma_window": Y_PRE_EWMA_WINDOW,
+        "y_pre_consecutive": Y_PRE_CONSECUTIVE,
         "category_maps": category_maps,
+        "score_policy": score_policy,
     }
 # =========================================================
 # 4) 入力列挙（単一ファイル／ディレクトリ・再帰）
 # =========================================================
-def list_input_files(csv_arg: str, recursive: bool) -> List[str]:
+def list_input_files(csv_arg: str) -> List[str]:
     """
     --csv がファイルならそのパス、ディレクトリなら配下の CSV を列挙して返す。
     recursive=True ならサブディレクトリまで探索。
     """
     input_path = Path(csv_arg).expanduser()
     if input_path.is_dir():
-        patterns = ["*.csv", "*.CSV"]
-        files: List[str] = []
-        if recursive:
-            for pat in patterns:
-                files += [str(p) for p in input_path.rglob(pat)]
-        else:
-            for pat in patterns:
-                files += [str(p) for p in input_path.glob(pat)]
-        files = sorted(set(files))
+        # Directory input is always scanned recursively.
+        iterator = input_path.rglob("*")
+        files = sorted(
+            {
+                str(p)
+                for p in iterator
+                if p.is_file() and p.suffix.lower() == ".csv"
+            }
+        )
         if not files:
-            raise FileNotFoundError(f"No CSV files found in directory: {input_path} (recursive={recursive})")
+            raise FileNotFoundError(f"No CSV files found in directory: {input_path} (recursive scan enabled)")
         return files
     elif input_path.is_file():
         return [str(input_path)]
     else:
         raise FileNotFoundError(f"--csv not found: {input_path.resolve(strict=False)}")
+
+
+def _normalize_path_key(path_str: str) -> str:
+    return os.path.normpath(str(path_str)).replace("\\", "/").lower()
+
+
+def _coerce_optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, float) and np.isnan(value):
+        return None
+    text = str(value).strip()
+    if text == "":
+        return None
+    try:
+        num = float(text)
+    except Exception:
+        return None
+    if np.isnan(num):
+        return None
+    return num
+
+
+def load_optional_meta_map(meta_csv_path: str, project_root: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Optional metadata CSV loader.
+    Supported path columns: relative_path, path, csv_path, file
+    Optional columns: label, abnormal_start_time, collision_time
+    """
+    if not meta_csv_path:
+        return {}
+    path_obj = Path(meta_csv_path).expanduser()
+    if not path_obj.is_absolute():
+        path_obj = (Path(project_root) / path_obj).resolve()
+    if not path_obj.exists():
+        print(f"[INFO] meta csv not found (optional): {path_obj}")
+        return {}
+
+    df_meta = pd.read_csv(path_obj, encoding="utf-8-sig")
+    col_map = {c.strip().lower(): c for c in df_meta.columns}
+    path_col = None
+    for candidate in ("relative_path", "path", "csv_path", "file"):
+        if candidate in col_map:
+            path_col = col_map[candidate]
+            break
+    if path_col is None:
+        print(f"[WARN] meta csv has no path column: {path_obj}")
+        return {}
+
+    label_col = col_map.get("label")
+    ast_col = col_map.get("abnormal_start_time")
+    ct_col = col_map.get("collision_time")
+
+    meta_map: Dict[str, Dict[str, Any]] = {}
+    loaded_rows = 0
+    for _, row in df_meta.iterrows():
+        raw_path = str(row[path_col]).strip()
+        if not raw_path:
+            continue
+        key = _normalize_path_key(raw_path)
+        record = {
+            "label": None,
+            "abnormal_start_time": _coerce_optional_float(row[ast_col]) if ast_col else None,
+            "collision_time": _coerce_optional_float(row[ct_col]) if ct_col else None,
+            "source": "meta_csv",
+            "meta_csv": str(path_obj),
+        }
+        if label_col:
+            try:
+                record["label"] = int(float(row[label_col]))
+            except Exception:
+                record["label"] = None
+        meta_map[key] = record
+        # basename fallback key
+        meta_map[_normalize_path_key(os.path.basename(raw_path))] = record
+        loaded_rows += 1
+
+    print(f"[INFO] meta csv loaded: {path_obj} (rows={loaded_rows})")
+    return meta_map
+
+
+def infer_label_from_path(path_str: str) -> Optional[int]:
+    p = _normalize_path_key(path_str)
+    has_abnormal = any(token in p for token in ("accident", "accidents", "abnormal", "anomaly"))
+    has_normal = "normal" in p
+    if has_abnormal and not has_normal:
+        return 1
+    if has_normal and not has_abnormal:
+        return 0
+    return None
+
+
+def infer_output_suffix_from_path(path_str: str) -> str:
+    """
+    Output filename suffix policy requested by user:
+    - path contains accidents/accident -> accidents
+    - path contains normal -> normal
+    - otherwise -> anomaly (legacy fallback)
+    """
+    p = _normalize_path_key(path_str)
+    if "accidents" in p or "accident" in p:
+        return "accidents"
+    if "normal" in p:
+        return "normal"
+    return "anomaly"
+
+
+def resolve_label_and_meta(
+    csv_path: str,
+    project_root: str,
+    meta_map: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    abs_key = _normalize_path_key(csv_path)
+    try:
+        rel_key = _normalize_path_key(os.path.relpath(csv_path, project_root))
+    except ValueError:
+        # 別ドライブ／別マウントの場合は relpath を諦める
+        rel_key = None
+    base_key = _normalize_path_key(os.path.basename(csv_path))
+    candidates = [abs_key, rel_key, base_key]
+
+    for key in candidates:
+        rec = meta_map.get(key)
+        if rec is not None:
+            label = rec.get("label", None)
+            if label in (0, 1):
+                return {
+                    "label": int(label),
+                    "label_source": "meta_csv",
+                    "abnormal_start_time": rec.get("abnormal_start_time"),
+                    "collision_time": rec.get("collision_time"),
+                }
+
+    inferred = infer_label_from_path(csv_path)
+    return {
+        "label": inferred,
+        "label_source": "path_rule" if inferred in (0, 1) else "unknown",
+        "abnormal_start_time": None,
+        "collision_time": None,
+    }
+
+
+def compute_ewma_scores(values: np.ndarray, window: int) -> np.ndarray:
+    out = np.full(values.shape, np.nan, dtype=np.float32)
+    w = max(1, int(window))
+    alpha = 2.0 / (w + 1.0)
+    prev = np.nan
+    for i, v in enumerate(values):
+        if not np.isfinite(v):
+            continue
+        if np.isfinite(prev):
+            prev = alpha * float(v) + (1.0 - alpha) * prev
+        else:
+            prev = float(v)
+        out[i] = float(prev)
+    return out
+
+
+def compute_consecutive_flags(values: np.ndarray, threshold: float, required: int) -> np.ndarray:
+    req = max(1, int(required))
+    out = np.full(values.shape, np.nan, dtype=np.float32)
+    run = 0
+    for i, v in enumerate(values):
+        if not np.isfinite(v):
+            run = 0
+            continue
+        if float(v) >= float(threshold):
+            run += 1
+        else:
+            run = 0
+        out[i] = 1.0 if run >= req else 0.0
+    return out
+
+
+def pick_file_probability(scores: np.ndarray, mode: str) -> Optional[float]:
+    finite = scores[np.isfinite(scores)]
+    if finite.size == 0:
+        return None
+    m = (mode or "tail").strip().lower()
+    if m == "max":
+        return float(np.max(finite))
+    return float(finite[-1])
+
+
+def _extract_time_axis(df_out: pd.DataFrame) -> np.ndarray:
+    if "time" in df_out.columns:
+        t = pd.to_numeric(df_out["time"], errors="coerce").to_numpy(dtype=np.float32)
+        if np.isfinite(t).any():
+            return t
+    return np.arange(len(df_out), dtype=np.float32)
+
+
+def compute_decision_times_row(
+    index_value: int,
+    df_out: pd.DataFrame,
+    label: Optional[int],
+    abnormal_start_time: Optional[float],
+    collision_time: Optional[float],
+) -> List[Any]:
+    times = _extract_time_axis(df_out)
+    y_pre = pd.to_numeric(df_out.get("y_pre", pd.Series(np.nan, index=df_out.index)), errors="coerce").to_numpy(dtype=np.float32)
+    y_conv = pd.to_numeric(df_out.get("y_conv", pd.Series(np.nan, index=df_out.index)), errors="coerce").to_numpy(dtype=np.float32)
+    detect = ((np.nan_to_num(y_pre, nan=0.0) >= 0.5) | (np.nan_to_num(y_conv, nan=0.0) >= 0.5))
+
+    first_detect = None
+    det_idx = np.where(detect)[0]
+    if det_idx.size > 0:
+        first_detect = float(times[int(det_idx[0])])
+
+    first_incorrect = None
+    if label == 1 and abnormal_start_time is not None:
+        wrong_idx = np.where(detect & (times < float(abnormal_start_time)))[0]
+        if wrong_idx.size > 0:
+            first_incorrect = float(times[int(wrong_idx[0])])
+    elif label == 0:
+        wrong_idx = np.where(detect)[0]
+        if wrong_idx.size > 0:
+            first_incorrect = float(times[int(wrong_idx[0])])
+
+    detection_delay = None
+    if label == 1 and first_detect is not None and abnormal_start_time is not None:
+        detection_delay = float(first_detect - float(abnormal_start_time))
+
+    ct_is_max = False
+    if collision_time is not None and np.isfinite(collision_time):
+        finite_time = times[np.isfinite(times)]
+        if finite_time.size > 0:
+            ct_is_max = bool(abs(float(collision_time) - float(np.max(finite_time))) < 1e-6)
+
+    # Keep TF-compatible columns/order.
+    return [
+        int(index_value),
+        label if label in (0, 1) else None,
+        abnormal_start_time,
+        first_detect,
+        detection_delay,
+        first_incorrect,
+        collision_time,
+        ct_is_max,
+    ]
+
+
+def save_basic_info_csv(run_dir: str, info: Dict[str, Any]) -> None:
+    pd.DataFrame([info]).to_csv(os.path.join(run_dir, "basic_info.csv"), index=False, encoding="utf-8")
+
+
+def save_decision_times_csv(run_dir: str, rows: List[List[Any]]) -> None:
+    columns = [
+        "Index",
+        "TrueLabel",
+        "AbnormalStartTime",
+        "FirstCorrectTime",
+        "DetectionDelay",
+        "FirstIncorrectTime",
+        "CollisionTime",
+        "CollisionTimeIsMax",
+    ]
+    pd.DataFrame(rows, columns=columns).to_csv(
+        os.path.join(run_dir, "decision_times.csv"), index=False, encoding="utf-8"
+    )
+
+
+def save_confusion_and_roc(
+    run_dir: str,
+    model_name: str,
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    threshold: float,
+) -> None:
+    if y_true.size == 0 or y_score.size == 0:
+        print("[WARN] skipped confusion/roc: no labeled file-level samples.")
+        return
+
+    y_pred = (y_score >= float(threshold)).astype(np.int32)
+    cm = np.zeros((2, 2), dtype=np.int64)
+    for t, p in zip(y_true.astype(np.int32), y_pred.astype(np.int32)):
+        if t in (0, 1) and p in (0, 1):
+            cm[t, p] += 1
+
+    cm_df = pd.DataFrame(
+        cm,
+        index=["true_0", "true_1"],
+        columns=["pred_0", "pred_1"],
+    )
+    cm_csv = os.path.join(run_dir, f"{model_name}_Inference_confusion_matrix.csv")
+    cm_df.to_csv(cm_csv, encoding="utf-8")
+
+    try:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(5, 4))
+        im = ax.imshow(cm, cmap="Blues")
+        ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+        ax.set_xticklabels(["pred_0", "pred_1"]); ax.set_yticklabels(["true_0", "true_1"])
+        for i in range(2):
+            for j in range(2):
+                ax.text(j, i, str(int(cm[i, j])), ha="center", va="center")
+        ax.set_title(f"{model_name} confusion matrix")
+        fig.colorbar(im, ax=ax)
+        fig.tight_layout()
+        fig.savefig(os.path.join(run_dir, f"{model_name}_Inference_confusion_matrix.png"), dpi=140)
+        plt.close(fig)
+    except Exception as e:
+        print(f"[WARN] failed to save confusion matrix plot: {e}")
+
+    roc_csv = os.path.join(run_dir, f"{model_name}_Inference_ROC.csv")
+    try:
+        from sklearn.metrics import auc, roc_curve
+        if len(np.unique(y_true)) < 2:
+            raise ValueError("ROC requires both labels 0 and 1.")
+        fpr, tpr, roc_thr = roc_curve(y_true, y_score)
+        roc_auc = float(auc(fpr, tpr))
+        pd.DataFrame({"fpr": fpr, "tpr": tpr, "threshold": roc_thr, "auc": roc_auc}).to_csv(
+            roc_csv, index=False, encoding="utf-8"
+        )
+        try:
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(5, 4))
+            ax.plot(fpr, tpr, label=f"AUC={roc_auc:.4f}")
+            ax.plot([0, 1], [0, 1], linestyle="--")
+            ax.set_xlabel("FPR"); ax.set_ylabel("TPR")
+            ax.set_title(f"{model_name} ROC")
+            ax.legend(loc="lower right")
+            ax.grid(True, alpha=0.3)
+            fig.tight_layout()
+            fig.savefig(os.path.join(run_dir, f"{model_name}_Inference_ROC.png"), dpi=140)
+            plt.close(fig)
+        except Exception as e:
+            print(f"[WARN] failed to save ROC plot: {e}")
+    except Exception as e:
+        pd.DataFrame(
+            [{"fpr": np.nan, "tpr": np.nan, "threshold": np.nan, "auc": np.nan, "note": str(e)}]
+        ).to_csv(roc_csv, index=False, encoding="utf-8")
+        print(f"[WARN] skipped ROC curve: {e}")
 # =========================================================
 # 5) 前処理（DataFrame単位）
 # =========================================================
@@ -309,29 +734,26 @@ def preprocess_dataframe_for_inference(
     df[features] = df[features].apply(pd.to_numeric, errors="coerce").astype(np.float32)
     return df
 from contextlib import nullcontext
-def mae_last_continuous(
+def mae_last_masked_all_features(
     seq_t: torch.Tensor,           # (1, T, D) 入力の正規化後ベクトル
     mask_last_exp: np.ndarray,     # (D,) one-hot 拡張後の欠損マスク（最後ステップ分）
     model: CausalTransformerAutoencoder,
-    cont_dim: int,
     device: str,
     use_amp: bool,
     amp_dtype: torch.dtype,
 ) -> float:
     """
-    学習時の compute_batch_mae_last と一致する MAE 計算（連続特徴のみ、最後ステップ、観測マスクで重み付け）。
+    学習時の compute_batch_mae_last と一致する MAE 計算。
+    対象は最後ステップの全特徴（連続 + one-hot）で、観測マスクで重み付けする。
     """
     autocast_ctx = torch.amp.autocast('cuda', enabled=(use_amp and device == "cuda"), dtype=amp_dtype) if device == "cuda" else nullcontext()
     with autocast_ctx:
         with torch.no_grad():
             recon_last = model.reconstruct_last(seq_t)[0]  # (D,)
-    # 連続成分を抽出
-    recon_last_cont = recon_last[:cont_dim].float()
-    last_true_cont = seq_t[0, -1, :cont_dim].float()
-    # 観測マスク（連続部分のみ）
-    obs_mask_cont = torch.from_numpy(1.0 - mask_last_exp[:cont_dim]).to(device).float()
-    denom = obs_mask_cont.sum().clamp(min=1.0)
-    mae = (recon_last_cont.sub(last_true_cont).abs() * obs_mask_cont).sum() / denom
+    last_true = seq_t[0, -1, :].float()
+    obs_mask = torch.from_numpy(1.0 - mask_last_exp).to(device).float()
+    denom = obs_mask.sum().clamp(min=1.0)
+    mae = (recon_last.float().sub(last_true).abs() * obs_mask).sum() / denom
     return float(mae.detach().cpu().item())
 # =========================================================
 # 6) スコア計算（ファイル単位のストリーミング推論）
@@ -369,7 +791,9 @@ def compute_stream_scores_for_file(
     use_amp = ctx["use_amp"]
     amp_dtype = ctx["amp_dtype"]
     threshold = float(ctx["threshold"])
-    cont_dim = len(CONTINUOUS_FEATURES)
+    y_pre_threshold = float(ctx["y_pre_threshold"])
+    y_pre_ewma_window = int(ctx["y_pre_ewma_window"])
+    y_pre_consecutive = int(ctx["y_pre_consecutive"])
 
     # CSV 読み込み
     df = pd.read_csv(
@@ -434,7 +858,7 @@ def compute_stream_scores_for_file(
         buf_raw.append(x_raw)
         buf_norm.append(x_exp_norm)
         # ウォームアップ（最低限 seq_len を満たす）
-        if len(buf_norm) < (warmup_needed/3):
+        if len(buf_norm) < warmup_needed:
             anomaly_scores.append(float("nan"))
             errors.append(float("nan"))
             is_flags.append(float("nan"))
@@ -453,30 +877,40 @@ def compute_stream_scores_for_file(
         ctx_len = min(len(buf_norm), int(seq_len))     # 直近の文脈長（最大 seq_len）
         seq = np.stack(list(buf_norm)[-ctx_len:])
         seq_t = torch.from_numpy(seq).unsqueeze(0).to(device)
-        # 学習時と同じ MAE（最後ステップ・連続特徴のみ・欠損除外）で算出
-        mae_cont = mae_last_continuous(seq_t, mask_last_exp, model, cont_dim, device, use_amp, amp_dtype)
+        # 学習時と同じ MAE（最後ステップ・全特徴・欠損除外）で算出
+        mae_all = mae_last_masked_all_features(seq_t, mask_last_exp, model, device, use_amp, amp_dtype)
 
         # 正規化スコア（p10〜p99 で 0〜1）
         low, high = float(ctx["p10"]), float(ctx["p99"])
-        score = (mae_cont - low) / max(high - low, 1e-6)
+        score = (mae_all - low) / max(high - low, 1e-6)
         score = float(np.clip(score, 0.0, 1.0))
 
         # 閾値判定（学習時と一致）
-        is_anomaly = (mae_cont > threshold)
+        is_anomaly = (mae_all > threshold)
 
         anomaly_scores.append(score)     # 0〜1 の連続スコア
-        errors.append(mae_cont)          # 生の MAE（連続のみ）
+        errors.append(mae_all)           # 生の MAE（全特徴）
         is_flags.append(1.0 if is_anomaly else 0.0)
         # 分布ベースの4段階レベル（0〜3）
         bounds_mae = [float(ctx["p50"]), float(ctx["p90"]), float(ctx["threshold"])]
-        level = int(np.digitize(mae_cont, bounds_mae))  # 0,1,2,3
+        level = int(np.digitize(mae_all, bounds_mae))  # 0,1,2,3
         levels.append(float(level))
 
+    score_arr = np.asarray(anomaly_scores, dtype=np.float32)
+    y_pre_score = compute_ewma_scores(score_arr, window=y_pre_ewma_window)
+    y_pre_flag = compute_consecutive_flags(y_pre_score, threshold=y_pre_threshold, required=y_pre_consecutive)
+
     df_out = df.copy()
-    df_out["anomaly"] = anomaly_scores      # 正規化スコア（0〜1）
-    df_out["error"] = errors              # MAE（連続のみ、最後ステップ、欠損除外）
+    # Legacy columns (kept for backward compatibility)
+    df_out["anomaly"] = anomaly_scores      # normalized score in [0, 1]
+    df_out["error"] = errors                # raw MAE error
     df_out["is_anomaly"] = is_flags
     df_out["anomaly_level"] = levels
+    # TF-aligned naming
+    df_out["y_conv_score"] = anomaly_scores
+    df_out["y_conv"] = is_flags
+    df_out["y_pre_score"] = y_pre_score
+    df_out["y_pre"] = y_pre_flag
     # ウォームアップ後から is_anomaly を埋める場合は保持した配列を使って代入
     # 例）df_out.loc[~np.isnan(df_out["score"].values), "is_anomaly"] = is_flags[start_idx:]
     return df_out
@@ -485,21 +919,134 @@ def compute_stream_scores_for_file(
 # =========================================================
 def main():
     parser = argparse.ArgumentParser(description="Stream anomaly scoring for test CSV using trained Transformer AE")
-    parser.add_argument("--csv", default=DEFAULT_INPUT_DIR, help="Path to test CSV or a directory that contains CSVs")
-    parser.add_argument("--artifacts_dir", default=os.path.join("artifacts", "transformer_ae"), help="Path to trained artifacts")
+    parser.add_argument("--csv", default=str(DEFAULT_INPUT_DIR), help="Path to test CSV or a directory that contains CSVs")
+    parser.add_argument(
+        "--artifacts_dir",
+        default=None,
+        help="Path to trained artifacts (default: out_dir from config/hyperparams_common.json)",
+    )
     parser.add_argument("--min_ctx", type=int, default=2, help="Minimum steps before scoring (stream warm-up)")
-    parser.add_argument("--recursive", action="store_true", help="Recursively search CSVs in subdirectories when --csv is a directory")
+    parser.add_argument(
+        "--meta_csv",
+        default=str(DEFAULT_META_CSV_PATH),
+        help="Optional metadata CSV path (label/abnormal_start_time/collision_time).",
+    )
+    parser.add_argument(
+        "--file_score_mode",
+        choices=["tail", "max"],
+        default="tail",
+        help="File-level probability aggregation mode for confusion matrix/ROC.",
+    )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        help="Deprecated: directory scanning is always recursive (kept for backward compatibility)",
+    )
     args = parser.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    ensure_tty()
+    artifacts_default = args.artifacts_dir if args.artifacts_dir else resolve_default_artifacts_dir()
+    artifacts_dir = prompt_artifacts_dir(
+        default_path=str(artifacts_default),
+        project_root=str(PROJECT_ROOT),
+        extra_candidates=[str(artifacts_default), str(LEGACY_DEFAULT_ARTIFACTS_DIR)],
+    )
+    csv_target = prompt_csv_or_dir_or_glob(
+        default_target=str(args.csv),
+        project_root=str(PROJECT_ROOT),
+        title="Select scoring input target",
+        include_tagged_option=True,
+    )
+    print(f"[INFO] artifacts_dir={artifacts_dir}")
+    print(f"[INFO] csv_target={csv_target}")
     # アーティファクト読み込み
-    cfg, thr_info, scaler, paths = load_artifacts(args.artifacts_dir)
+    cfg, thr_info, scaler, paths = load_artifacts(artifacts_dir)
     # 推論用コンテキスト構築
     ctx = build_inference_context(cfg, thr_info, scaler, paths["model_path"], device)
     # 入力列挙
-    files = list_input_files(args.csv, args.recursive)
+    if csv_target == TAGGED_DATASET_TOKEN:
+        try:
+            files, report = build_tagged_dataset_csvs_from_config(
+                config_path=str(DEFAULT_TAGGED_FILTER_INFER_PATH),
+                pattern="*.csv",
+            )
+        except Exception as e:
+            print(f"[WARN] tagged dataset preparation failed: {repr(e)} -> inference is skipped.")
+            return
+        print(f"[INFO] tagged filter config: {report['config_path']}")
+        print(f"[INFO] ledger file-name column: {report['file_name_column']}")
+        print(
+            f"[INFO] ledger rows: total={report['rows_total']}, "
+            f"blank_file={report['rows_skipped_blank_file']}, filtered_out={report['rows_filtered_out']}"
+        )
+        print(f"[INFO] tagged candidates after AQ-AY filters: {report['candidates_after_filter']}")
+        sampling_enabled = bool(report.get("sampling_enabled", False))
+        if sampling_enabled:
+            sampling_seed = 42
+            if DEFAULT_HPARAMS_PATH.exists():
+                try:
+                    with open(DEFAULT_HPARAMS_PATH, "r", encoding="utf-8-sig") as f:
+                        hp = json.load(f)
+                    sampling_seed = int(hp.get("random_seed", 42))
+                except Exception:
+                    sampling_seed = 42
+            files, sampling = sample_paths_interactively(
+                files,
+                seed=sampling_seed,
+                title="Select scoring usage ratio (file count based)",
+            )
+            print(
+                f"[INFO] tagged dataset candidates={sampling['total_count']}, "
+                f"selected={sampling['percent']}% -> {sampling['sample_count']} files"
+            )
+        else:
+            print(f"[INFO] sampling disabled by config -> use 100% ({len(files)} files)")
+        for flt in report.get("filters_active", []):
+            print(
+                f"[INFO] filter active: {flt['excel_col']} ({flt['column_name']}) "
+                f"mode={flt['mode']} values={flt['values']}"
+            )
+        for root in report.get("unreachable_roots", []):
+            print(f"[WARN] network root unreachable or missing: {root}")
+        if report["duplicate_network_filenames"] > 0:
+            print(
+                "[INFO] duplicate filenames resolved by priority (network_roots order): "
+                f"{report['duplicate_network_filenames']}"
+            )
+        if report["missing_in_network"] > 0:
+            print(f"[WARN] excluded (listed in ledger but file missing in network): {report['missing_in_network']}")
+        if report["missing_in_ledger"] > 0:
+            print(f"[WARN] excluded (file exists in network but missing in ledger): {report['missing_in_ledger']}")
+        print(f"[INFO] tagged usable files: {report['usable_count']}")
+    else:
+        files = list_input_files(csv_target)
+    meta_map = load_optional_meta_map(args.meta_csv, str(PROJECT_ROOT))
     # 出力ディレクトリ
-    out_dir = "result"
+    out_dir = "1_transformer/result/OFF_pa99"
     os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(DEFAULT_VALID_RESULTS_DIR, exist_ok=True)
+    ts_str = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    run_dir = os.path.join(str(DEFAULT_VALID_RESULTS_DIR), f"{ts_str}_{MODEL_NAME}_inference_csv")
+    os.makedirs(run_dir, exist_ok=True)
+
+    basic_info = {
+        "timestamp": ts_str,
+        "model": MODEL_NAME,
+        "csv_target": csv_target,
+        "artifacts_dir": artifacts_dir,
+        "meta_csv": str(args.meta_csv),
+        "file_score_mode": args.file_score_mode,
+        "min_ctx": int(args.min_ctx),
+        "num_files": int(len(files)),
+        "y_conv_threshold": float(ctx["y_conv_threshold"]),
+        "y_pre_threshold": float(ctx["y_pre_threshold"]),
+        "y_pre_ewma_window": int(ctx["y_pre_ewma_window"]),
+        "y_pre_consecutive": int(ctx["y_pre_consecutive"]),
+    }
+    save_basic_info_csv(run_dir, basic_info)
+
+    file_records: List[Dict[str, Any]] = []
+    decision_rows: List[List[Any]] = []
     logger = InlineLogger()
     # 先頭を優先して末尾を省略（例: AZSH20-1067305_001608_2022年...）
     def short_head(s: str, max_len: int) -> str:
@@ -524,8 +1071,57 @@ def main():
             # 推論と保存
             df_out = compute_stream_scores_for_file(csv_path, ctx, min_ctx=args.min_ctx)
             base = p.stem
-            out_path = os.path.join(out_dir, f"{base}_anomaly.csv")
+            suffix = infer_output_suffix_from_path(str(csv_path))
+            out_path = os.path.join(out_dir, f"{base}_{suffix}.csv")
             df_out.to_csv(out_path, index=False, float_format="%.6f")
+
+            label_meta = resolve_label_and_meta(
+                csv_path=str(csv_path),
+                project_root=str(PROJECT_ROOT),
+                meta_map=meta_map,
+            )
+            label = label_meta["label"]
+            label_source = label_meta["label_source"]
+            ast = label_meta["abnormal_start_time"]
+            ct = label_meta["collision_time"]
+
+            score_series = pd.to_numeric(df_out["y_conv_score"], errors="coerce").to_numpy(dtype=np.float32)
+            y_pre_series = pd.to_numeric(df_out["y_pre"], errors="coerce").to_numpy(dtype=np.float32)
+            y_conv_series = pd.to_numeric(df_out["y_conv"], errors="coerce").to_numpy(dtype=np.float32)
+            file_prob = pick_file_probability(score_series, mode=args.file_score_mode)
+            file_pred = None
+            if file_prob is not None:
+                file_pred = int(file_prob >= float(ctx["y_conv_threshold"]))
+
+            file_records.append(
+                {
+                    "csv_path": str(csv_path),
+                    "label": label,
+                    "label_source": label_source,
+                    "file_prob": file_prob,
+                    "file_pred": file_pred,
+                    "file_score_mode": args.file_score_mode,
+                    "y_conv_threshold": float(ctx["y_conv_threshold"]),
+                    "abnormal_start_time": ast,
+                    "collision_time": ct,
+                    "rows_total": int(len(df_out)),
+                    "rows_scored": int(np.isfinite(score_series).sum()),
+                    "rows_y_pre_alert": int(np.nansum(y_pre_series >= 0.5)),
+                    "rows_y_conv_alert": int(np.nansum(y_conv_series >= 0.5)),
+                    "legacy_output_csv": out_path,
+                    "output_suffix": suffix,
+                }
+            )
+
+            decision_rows.append(
+                compute_decision_times_row(
+                    index_value=fi - 1,
+                    df_out=df_out,
+                    label=label,
+                    abnormal_start_time=ast,
+                    collision_time=ct,
+                )
+            )
             # 成功時は何も表示しない（次のファイルの Processing 行で上書き）
         except Exception as e:
             # 警告は独立した行で出すため、まず現在の行を確定
@@ -534,5 +1130,31 @@ def main():
             # 以降は次のループで再び1行進行表示に戻る
     # ループ終了後、最後の進行表示行を確定
     logger.newline()
+
+    if file_records:
+        df_file = pd.DataFrame(file_records)
+        df_file.to_csv(os.path.join(run_dir, "file_scores.csv"), index=False, encoding="utf-8")
+    save_decision_times_csv(run_dir, decision_rows)
+
+    if file_records:
+        valid_rows = [
+            r for r in file_records
+            if r.get("label") in (0, 1) and r.get("file_prob") is not None and np.isfinite(float(r["file_prob"]))
+        ]
+        if valid_rows:
+            y_true = np.asarray([int(r["label"]) for r in valid_rows], dtype=np.int32)
+            y_score = np.asarray([float(r["file_prob"]) for r in valid_rows], dtype=np.float32)
+            save_confusion_and_roc(
+                run_dir=run_dir,
+                model_name=MODEL_NAME,
+                y_true=y_true,
+                y_score=y_score,
+                threshold=float(ctx["y_conv_threshold"]),
+            )
+        else:
+            print("[WARN] no labeled file scores for confusion/roc output.")
+
+    print(f"[DONE] legacy csv output: {out_dir}")
+    print(f"[DONE] tf-style run output: {run_dir}")
 if __name__ == "__main__":
     main()
