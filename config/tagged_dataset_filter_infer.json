@@ -21,7 +21,7 @@
       "values": [1]
     },
     "P": {
-      "enabled": true,
+      "enabled": false ,
       "excel_col": "P",
       "header_name": "群1",
       "mode": "include",
@@ -35,11 +35,11 @@
       "values": []
     },
     "R": {
-      "enabled": false,
+      "enabled": true,
       "excel_col": "R",
       "header_name": "群3",
       "mode": "include",
-      "values": []
+      "values": ["Valid"]
     },
     "S": {
       "enabled": false,
@@ -73,5 +73,11 @@
   "combine": "AND",
   "sampling": {
     "enabled": true
+  },
+  "inference_time_range": {
+    "enabled": true,
+    "column": "time",
+    "start": -20.0,
+    "end":20.0
   }
 }

@@ -245,7 +245,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--csv",
-        default="1_transformer/result/ON_pa95",
+        default="1_transformer/result/ON_par100_50step_gun3",
         help=(
             "CSVファイル, ディレクトリ, もしくはグロブパターンを指定できます "
             "(例: --csv result, --csv result\\*.csv, --csv result\\foo.csv)"

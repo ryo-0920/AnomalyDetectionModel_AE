@@ -3,7 +3,7 @@
   "evaluation": {
     "run_dir": "..\\1_transformer\\result\\ON_pa99",
     "label_review_sheet": {
-      "path": "C:\\Users\\Z628058\\トヨタ自動車株式会社\\4DAA6G_ファイル管理 - TMC+派遣\\10_市場データ管理台帳\\事故データ_Label\\202606_#3_namefix\\label_review_sheet‗202606_#3_add.xlsx",
+      "path": "C:\\Users\\Z628058\\トヨタ自動車株式会社\\4DAA6G_ファイル管理 - TMC+派遣\\10_市場データ管理台帳\\事故データ_Label\\202606‗＃3\\label_review_sheet‗202603_#3.xlsx",
       "sheet_name": "label_review_sheet",
       "file_column_excel_index": 19,
       "a1_override_col": 9,

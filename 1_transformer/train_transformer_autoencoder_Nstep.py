@@ -1108,6 +1108,52 @@ def main():
         args.seq_len,
         csv_paths_override=csv_paths_override,
     )
+# ---------- ここから追加 ----------
+    # dataset がセグメント型か単一型かで train/valid のファイル一覧を決定して保存する
+    train_csv_paths_list: List[str] = []
+    valid_csv_paths_list: List[str] = []
+    # train/valid の比率と seed は args に入っている想定（hparams から継承）
+    train_ratio = 1.0 - args.val_ratio
+    split_seed = int(args.seed)
+    # SequenceDatasetMaskedSegments の場合はセグメント単位で分割してどのセグメントが train/val かを特定
+    if isinstance(dataset, SequenceDatasetMaskedSegments):
+        # split_segments を使って train/val の Subset を作る（内部でシャッフルされる）
+        train_subset, val_subset = split_segments(dataset, train_ratio=train_ratio, gap=args.seq_len, seed=split_seed)
+        # train_subset.indices / val_subset.indices ではウィンドウ単位の index が得られるので、
+        # セグメント単位の所属情報を得るには dataset.seg_names と dataset.seg_win_counts を利用する。
+        # ここでは簡単にセグメント選択のロジックを再利用して train/val セグメント集合を得る。
+        S = len(dataset.seg_win_counts)
+        rng = random.Random(split_seed)
+        seg_indices = list(range(S))
+        rng.shuffle(seg_indices)
+        n_train_seg = max(1, int(round(train_ratio * S)))
+        train_segs = set(seg_indices[:n_train_seg])
+        val_segs = set(seg_indices[n_train_seg:])
+        # seg_names は prepare_training_data -> SequenceDatasetMaskedSegments 作成時に names 引数で渡されている
+        seg_names = getattr(dataset, "seg_names", None) or getattr(dataset, "seg_names", None) or getattr(dataset, "seg_names", None)
+        # fallback: attribute name may be seg_names or seg_names not present; try seg_names / seg_names-like
+        if seg_names is None:
+            # dataset で渡した used_paths が main 側で返却されていればそれを使えるはず
+            seg_names = getattr(dataset, "seg_names", None) or []
+        # Build train/valid file lists by seg ownership
+        for s_idx, name in enumerate(dataset.seg_names if hasattr(dataset, "seg_names") else []):
+            if s_idx in train_segs:
+                train_csv_paths_list.append(name)
+            else:
+                valid_csv_paths_list.append(name)
+    else:
+        # 単一CSV または複数ファイルが list で渡されている場合
+        # csv_paths は prepare_training_data が返す used_paths（存在するファイルパスのリスト）
+        total_paths = list(csv_paths)  # copy
+        if total_paths:
+            # deterministic split using seed
+            rng = random.Random(split_seed)
+            # shuffle a copy to mimic split_segments randomness, or keep order for timewise split
+            # ここでは時間順を保つ（元の prepare_training_data の挙動に合わせる）
+            n_train = max(1, min(len(total_paths) - 1, int(len(total_paths) * train_ratio)))
+            train_csv_paths_list = total_paths[:n_train]
+            valid_csv_paths_list = total_paths[n_train:]
+    # ---------- ここまで追加 ----------
     if not csv_paths or dataset is None or scaler is None or layout is None or input_dim == 0:
         print("[WARN] 有効な学習データがないため、学習をスキップします。"); return
     if len(csv_paths) > 1:

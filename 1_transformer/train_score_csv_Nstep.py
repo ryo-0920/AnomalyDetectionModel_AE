@@ -293,6 +293,10 @@ def build_inference_context(
     p50 = float(thr_info.get("p50", mean))
     p90 = float(thr_info.get("p90", mean + 2.0*std))
     p99 = float(thr_info.get("p99", mean + 3.0*std))
+    # tail_steps を threshold.json から取得（無ければ 1）
+    tail_steps = int(thr_info.get("tail_steps", 1))
+    if tail_steps < 1:
+        tail_steps = 1
     temperature = float(thr_info.get("temperature", max((p90 - p50) / 6.0, 1e-6)))
     y_conv_threshold = float(np.clip((threshold - p10) / max(p99 - p10, 1e-6), 0.0, 1.0))
     y_pre_threshold = float(np.clip(y_conv_threshold * Y_PRE_THRESHOLD_SCALE, 0.0, 1.0))
@@ -308,7 +312,7 @@ def build_inference_context(
         "model": model,
         "scaler": scaler,
         "device": device,
-        # 追加: AMP
+        # AMP
         "use_amp": use_amp,
         "amp_dtype": amp_dtype,
         "feature_rules": feature_rules,
@@ -335,6 +339,7 @@ def build_inference_context(
         "y_pre_consecutive": Y_PRE_CONSECUTIVE,
         "category_maps": category_maps,
         "score_policy": score_policy,
+        "tail_steps": tail_steps,
     }
 # =========================================================
 # X) 推論時 time 範囲設定の読み込み・適用
@@ -712,17 +717,18 @@ def preprocess_dataframe_for_inference(
     df = apply_categorical_mapping(df, categorical_features, category_maps, default_unknown_id=DEFAULT_UNKNOWN_ID)
     df[features] = df[features].apply(pd.to_numeric, errors="coerce").astype(np.float32)
     return df
-def mae_last_masked_all_features(
+def mae_tail_masked_all_features(
     seq_t: torch.Tensor,           # (1, T, D) 入力の正規化後ベクトル
-    mask_last_exp: np.ndarray,     # (D,) one-hot 拡張後の欠損マスク（最後ステップ分）
+    mask_seq_exp: np.ndarray,      # (T, D) one-hot 拡張後の欠損マスク（全ステップ分）
     model: CausalTransformerAutoencoder,
     device: str,
     use_amp: bool,
     amp_dtype: torch.dtype,
+    tail_steps: int,
 ) -> float:
     """
-    学習時の compute_batch_mae_last と一致する MAE 計算。
-    対象は最後ステップの全特徴（連続 + one-hot）で、観測マスクで重み付けする。
+    学習時の compute_batch_mae_tail と一致する MAE 計算。
+    対象は末尾 tail_steps ステップの全特徴（連続 + one-hot）。
     """
     if device == "cuda" and use_amp:
         autocast_ctx = torch.amp.autocast("cuda", dtype=amp_dtype)
@@ -730,11 +736,21 @@ def mae_last_masked_all_features(
         autocast_ctx = nullcontext()
     with torch.no_grad():
         with autocast_ctx:
-            recon_last = model.reconstruct_last(seq_t)[0]  # (D,)
-    last_true = seq_t[0, -1, :].float()
-    obs_mask = torch.from_numpy(1.0 - mask_last_exp).to(device).float()
-    denom = obs_mask.sum().clamp(min=1.0)
-    mae = (recon_last.float().sub(last_true).abs() * obs_mask).sum() / denom
+            # 全ステップの再構成系列を取得
+            recon_seq = model(seq_t)  # (1, T, D)
+    recon_seq = recon_seq.float()
+    _, T, _ = recon_seq.shape
+    k = max(1, int(tail_steps))
+    k = min(k, T)  # 文脈長より長くならないように
+    start = T - k
+    recon_tail = recon_seq[:, start:, :]          # (1, k, D)
+    true_tail = seq_t[:, start:, :].float()       # (1, k, D)
+    # np.ndarray -> torch.Tensor に変換し、同じ tail 区間を切り出す
+    miss_tail = torch.from_numpy(mask_seq_exp[start:]).unsqueeze(0).to(device).float()  # (1, k, D)
+    obs_mask = 1.0 - miss_tail
+    abs_err = (recon_tail - true_tail).abs()
+    num_obs = obs_mask.sum().clamp(min=1.0)
+    mae = (abs_err * obs_mask).sum() / num_obs
     return float(mae.detach().cpu().item())
 # =========================================================
 # 6) スコア計算（ファイル単位のストリーミング推論）
@@ -775,6 +791,9 @@ def compute_stream_scores_for_file(
     y_pre_threshold = float(ctx["y_pre_threshold"])
     y_pre_ewma_window = int(ctx["y_pre_ewma_window"])
     y_pre_consecutive = int(ctx["y_pre_consecutive"])
+    tail_steps = int(ctx.get("tail_steps", 1))
+    if tail_steps < 1:
+        tail_steps = 1
     # CSV 読み込み
     df = pd.read_csv(
         csv_path,
@@ -797,10 +816,17 @@ def compute_stream_scores_for_file(
     # ストリーム用バッファ
     buf_norm: Deque[np.ndarray] = deque(maxlen=seq_len)  # 正規化＋one-hot 結合後
     buf_raw: Deque[np.ndarray] = deque(maxlen=seq_len)   # 欠損補完後の元スケール（F）
+    buf_missing: Deque[np.ndarray] = deque(maxlen=seq_len)  # 欠損マスク（F）
     anomaly_scores: List[float] = []
-    is_flags: List[int] = []
+    is_flags: List[float] = []   # NaN も入るため float にしておく
     errors: List[float] = []
     levels: List[float] = []
+    # NaN 出力行をまとめて追加する小ヘルパー
+    def _append_nan_row():
+        anomaly_scores.append(float("nan"))
+        errors.append(float("nan"))
+        is_flags.append(float("nan"))
+        levels.append(float("nan"))
     for i in range(len(df)):
         # 1) 行取り出し (F,)
         row = df.loc[i, features].to_numpy(dtype=np.float32)
@@ -845,6 +871,7 @@ def compute_stream_scores_for_file(
         # バッファ更新
         buf_raw.append(x_raw)
         buf_norm.append(x_exp_norm)
+        buf_missing.append(is_missing)
         # この行が time 範囲内かどうか判定 --------------
         t_i = t_arr[i]
         in_range = np.isfinite(t_i)
@@ -854,34 +881,44 @@ def compute_stream_scores_for_file(
             in_range = in_range and (t_i <= float(end_val))
         if not in_range:
             # 範囲外の行 → 推論はせず、出力は NaN
-            anomaly_scores.append(float("nan"))
-            errors.append(float("nan"))
-            is_flags.append(float("nan"))
-            levels.append(float("nan"))
+            _append_nan_row()
             continue
-        # 8) 欠損マスク（最後ステップ分）を入力次元に拡張
-        mask_last_exp = expand_mask_for_onehot_precomputed(
-            is_missing.reshape(1, -1),
+        # 8) 文脈長と系列の取り出し（最大 seq_len）
+        ctx_len = min(len(buf_norm), int(seq_len))     # 直近の文脈長（最大 seq_len）
+        if ctx_len <= 0:
+            _append_nan_row()
+            continue
+        # 入力系列 (ctx_len, D) と 欠損マスク (ctx_len, F) を取り出す
+        seq = np.stack(list(buf_norm)[-ctx_len:])             # (ctx_len, D)
+        miss_seq = np.stack(list(buf_missing)[-ctx_len:])     # (ctx_len, F)
+        # 欠損マスクを one-hot 展開後次元に拡張 -> (ctx_len, D)
+        mask_seq_exp = expand_mask_for_onehot_precomputed(
+            miss_seq,
             idx_cont,
             CATEGORICAL_FEATURES,
             specs,
             offsets,
-            features
-        )[0]
-        # 9) 予測とスコア
-        ctx_len = min(len(buf_norm), int(seq_len))     # 直近の文脈長（最大 seq_len）
-        seq = np.stack(list(buf_norm)[-ctx_len:])
-        seq_t = torch.from_numpy(seq).unsqueeze(0).to(device)
-        # 学習時と同じ MAE（最後ステップ・全特徴・欠損除外）で算出
-        mae_all = mae_last_masked_all_features(seq_t, mask_last_exp, model, device, use_amp, amp_dtype)
+            features,
+        )
+        seq_t = torch.from_numpy(seq).unsqueeze(0).to(device) # (1, ctx_len, D)
+        # 9) 予測とスコア（末尾 tail_steps ステップの MAE）
+        mae_all = mae_tail_masked_all_features(
+            seq_t=seq_t,
+            mask_seq_exp=mask_seq_exp,
+            model=model,
+            device=device,
+            use_amp=use_amp,
+            amp_dtype=amp_dtype,
+            tail_steps=tail_steps,
+        )
         # 正規化スコア（p10〜p99 で 0〜1）
         low, high = float(ctx["p10"]), float(ctx["p99"])
         score = (mae_all - low) / max(high - low, 1e-6)
         score = float(np.clip(score, 0.0, 1.0))
-        # 閾値判定（学習時と一致）
+        # 閾値判定
         is_anomaly = (mae_all > threshold)
-        anomaly_scores.append(score)     # 0〜1 の連続スコア
-        errors.append(mae_all)           # 生の MAE（全特徴）
+        anomaly_scores.append(score)
+        errors.append(mae_all)
         is_flags.append(1.0 if is_anomaly else 0.0)
         # 分布ベースの4段階レベル（0〜3）
         bounds_mae = [float(ctx["p50"]), float(ctx["p90"]), float(ctx["threshold"])]
@@ -930,9 +967,9 @@ def main():
         help="Deprecated: directory scanning is always recursive (kept for backward compatibility)",
     )
     parser.add_argument(
-        "--legacy_out",
-        default=None,
-        help="Legacy CSV output directory (relative to project root or absolute). Optional.",
+        "--legacy_out", 
+        default=None, 
+        help="Legacy CSV output directory (optional)"
     )
     args = parser.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1044,7 +1081,6 @@ def main():
     # デバッグ用ログ（ここで run_dir/out_dir は確実に定義されている）
     print(f"[INFO] legacy csv output dir: {out_dir}")
     print(f"[INFO] tf-style run output dir: {run_dir}")
-
     basic_info = {
         "timestamp": ts_str,
         "model": MODEL_NAME,
