@@ -1,0 +1,120 @@
+feature: eval-score-csv-single-config
+phase: implementation_unlocked_test_design
+spec:
+  draft: .codex/spec-drafts/eval-score-csv-single-config.md
+  open_issues: .codex/open-issues/eval-score-csv-single-config.md
+  work_notes: .codex/work-notes/eval-score-csv-single-config.md
+  reviewed_latest_spec_designer_output: true
+  reviewed_summary: >
+    eval_score_csv adds a new --config single JSON mode that supplies both
+    evaluation.label_review_sheet and evaluation.normal_ledger_sheet, while
+    preserving the existing --config_on/--config_off two-file mode, rejecting
+    mixed or partial config forms, and leaving input directories, output files,
+    evaluation calculations, dependencies, Docker, and CUDA requirements unchanged.
+testability:
+  status: ok_for_promotion
+  blockers: []
+  open_questions: []
+  rationale:
+    - CLI help and usage errors are observable through the legacy wrapper command.
+    - Single-config and two-config behavior are observable as a config resolution contract without running full evaluation.
+    - Required-key and missing-path failures have concrete path/key expectations.
+    - Non-goals are verifiable through CLI validation, existing smoke tests, and implementation diff review.
+  non_blocking_notes:
+    - >
+      The draft lists missing config path behavior in S-003 but not as an
+      independent acceptance criterion. This traceability file tracks it as
+      S-003-path; promotion is still OK because the expected behavior is
+      explicit and testable.
+test_plan: .codex/test-plans/eval-score-csv-single-config.md
+test_cases:
+  markdown: .codex/test-cases/eval-score-csv-single-config.md
+  data: null
+acceptance_criteria:
+  AC-001:
+    description: "python 1_transformer/eval_score_csv.py --help shows --config, --config_on, and --config_off."
+    test_cases:
+      - TC-01
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+    status: planned_after_unlock
+  AC-002:
+    description: "--config <path> alone loads label_review_sheet and normal_ledger_sheet from the same JSON."
+    test_cases:
+      - TC-02
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+    status: planned_after_unlock
+  AC-003:
+    description: "--config_on <on_path> --config_off <off_path> keeps loading label_review_sheet from ON config and normal_ledger_sheet from OFF config."
+    test_cases:
+      - TC-03
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+    status: planned_after_unlock
+  AC-004:
+    description: "Mixed --config and --config_on/--config_off usage fails as a usage error before evaluation starts."
+    test_cases:
+      - TC-04
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+    status: planned_after_unlock
+  AC-005:
+    description: "A lone --config_on or lone --config_off without --config fails as a usage error before evaluation starts."
+    test_cases:
+      - TC-05
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+    status: planned_after_unlock
+  AC-006:
+    description: "Single config missing evaluation.label_review_sheet or evaluation.normal_ledger_sheet fails with target path and missing key."
+    test_cases:
+      - TC-06
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+    status: planned_after_unlock
+  AC-007:
+    description: "Existing config/tagged_dataset_filter_eval_ON.json and config/tagged_dataset_filter_eval_OFF.json remain accepted by the two-config mode."
+    test_cases:
+      - TC-03
+      - TC-07
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+    status: planned_after_unlock
+  AC-008:
+    description: "--on_dir, --off_dir, --out_dir, --fpr_targets, --score_col, --verbose meanings and output contracts are unchanged in both config modes."
+    test_cases:
+      - TC-08
+      - TC-09
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+      - tests/test_script_organization_smoke.py
+    manual_checks:
+      - Review implementation diff for no evaluation.run_dir fallback into --on_dir/--off_dir.
+      - Review implementation diff for no output filename, evaluation calculation, dependency, Docker, CUDA, or OS requirement changes.
+    status: planned_after_unlock
+  S-003-path:
+    description: "A specified config file that does not exist fails with the target path."
+    test_cases:
+      - TC-06
+    automated_by:
+      - tests/test_eval_score_csv_single_config_acceptance.py
+    status: planned_after_unlock
+blocked_items: []
+red_command: python -m unittest tests.test_eval_score_csv_single_config_acceptance
+green_command: python -m unittest tests.test_eval_score_csv_single_config_acceptance tests.test_script_organization_smoke
+junit_xml_command: >
+  uv run pytest tests/test_eval_score_csv_single_config_acceptance.py --junit-xml=.codex/validation/artifacts/eval-score-csv-single-config/pytest.xml
+junit_xml_note: >
+  Candidate only if pytest is available or explicitly introduced; current observed test framework is unittest and no pyproject.toml/pytest configuration was found.
+implementation_waiting:
+  possible_from_test_design_side: true
+  condition: >
+    Validator confirms the executable acceptance test red result after
+    tests/test_eval_score_csv_single_config_acceptance.py is added. From the
+    non-executable test-design side, there are no blockers.
+validation_environment:
+  primary: host_python
+  docker_required: false
+source_code_edited: false
+tests_edited: false

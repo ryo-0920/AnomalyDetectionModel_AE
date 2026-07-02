@@ -1,0 +1,46 @@
+# ---- base ----
+# プロジェクト単位の Codex 設定ドラフト。
+#
+# 長期的に維持する作業規約は AGENTS.md、役割定義は .codex/agents/、
+# 再利用可能な手順は .agents/skills/ に置く。
+#
+# チーム標準として必須の Codex 機能のみ有効化する。
+
+[features]
+multi_agent = true
+
+[agents]
+max_threads = 6
+max_depth = 1
+
+# model = "gpt-5.4"
+# model_reasoning_effort = "medium"
+# personality = "pragmatic"
+
+# .agents/skills/ 配下の repo-scoped skills は Codex が探索する。
+# [[skills.config]] は、個別 skill の無効化や追加 path が必要な場合のみ使う。
+
+# プロジェクト信頼設定は path 固有なので、通常は各ユーザーが設定する。
+# [projects."/absolute/path/to/repository"]
+# trust_level = "trusted"
+
+# プラグインの有効化はチームと環境に依存する。
+# [plugins."github@openai-curated"]
+# enabled = true
+
+# ---- python ----
+# Python 向け Codex 設定ドラフト。
+#
+# 先に templates/base/.codex/config.toml を適用する。
+# 有効設定は最小限かつプロジェクト固有に保つ。
+# 運用規約は AGENTS.md に置く。
+
+# model = "gpt-5.5"
+# model_reasoning_effort = "medium"
+
+# 初期化/表示ツール向けのメタデータ案:
+# template_kind = "python"
+# default_dependency_manager = "uv"
+# default_test_command = "uv run pytest"
+# default_validation_report = ".codex/validation/artifacts/<feature>/pytest.xml"
+

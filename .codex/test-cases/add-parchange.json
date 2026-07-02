@@ -1,0 +1,71 @@
+{
+  "feature": "add-parchange",
+  "description": "Data for threshold percentile stat expansion acceptance tests.",
+  "additional_percentiles": [
+    {"key": "p95", "percentile": 95.0},
+    {"key": "p99_5", "percentile": 99.5},
+    {"key": "p99_9", "percentile": 99.9},
+    {"key": "p99_99", "percentile": 99.99},
+    {"key": "p99_999", "percentile": 99.999}
+  ],
+  "required_existing_keys": [
+    "threshold",
+    "mean",
+    "std",
+    "p10",
+    "p50",
+    "p90",
+    "p99",
+    "percentile",
+    "temperature",
+    "n_samples",
+    "score_policy"
+  ],
+  "required_nstep_keys": [
+    "tail_steps"
+  ],
+  "representative_distribution": {
+    "mae_values": [0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0],
+    "percentile": 99.5,
+    "expected": {
+      "p10": 0.55,
+      "p50": 12.0,
+      "p90": 243.20000000000005,
+      "p95": 371.1999999999998,
+      "p99": 483.84000000000015,
+      "p99_5": 497.9200000000001,
+      "p99_9": 509.1840000000002,
+      "p99_99": 511.71839999999975,
+      "p99_999": 511.9718399999997
+    },
+    "expected_threshold_key": "p99_5"
+  },
+  "boundary_distributions": [
+    {
+      "name": "constant",
+      "mae_values": [7.0, 7.0, 7.0, 7.0],
+      "expected_all_high_percentiles": 7.0
+    },
+    {
+      "name": "duplicates",
+      "mae_values": [0.0, 0.0, 1.0, 1.0, 10.0, 10.0, 100.0]
+    }
+  ],
+  "score_invariance_mae_values": [0.0, 0.55, 12.0, 243.2, 483.84, 512.0],
+  "target_modules": {
+    "mainstream_training": [
+      "src/gofumi_ae/training/standard.py",
+      "src/gofumi_ae/training/nstep.py"
+    ],
+    "mainstream_inference": [
+      "src/gofumi_ae/inference/standard.py",
+      "src/gofumi_ae/inference/nstep.py"
+    ],
+    "legacy_cli": [
+      "1_transformer/train_transformer_autoencoder.py",
+      "1_transformer/train_transformer_autoencoder_Nstep.py",
+      "1_transformer/train_score_csv.py",
+      "1_transformer/train_score_csv_Nstep.py"
+    ]
+  }
+}

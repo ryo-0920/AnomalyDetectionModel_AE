@@ -1,0 +1,14 @@
+# Decision Log
+
+人間が判断した確定事項を記録する。`.codex/open-issues/` には現在判断が必要な未解決項目だけを残し、確定済み事項はここへ移す。
+
+## 記録
+
+| 日付 | 決定 | 理由 | 却下した主な選択肢 | 関連 |
+| --- | --- | --- | --- | --- |
+| 未記録 | 初期化時点では判断記録なし。 | - | - | - |
+| 2026-06-19 | スクリプト整理草案について、パッケージ名は `gofumi_ae` とする。旧 CLI 互換は他モデル追加の可能性を考慮して当面維持する。Nstep 版は本流へ統合しつつ、スクリプト実行時に通常版と使い分け可能にする。tracked な `__pycache__/` と `desktop.ini` は Git 管理から外す方針とする。 | 現行利用者への互換性を保ちながら、将来のモデル追加と構成整理を両立するため。Nstep 版は派生実装として分離維持するより、本流へ寄せたほうが保守しやすいため。`__pycache__/` と `desktop.ini` は成果物ではなく、追跡対象にしないほうが管理が安定するため。 | 別パッケージ名への変更、旧 CLI の早期廃止、Nstep 版の `experiments/` 退避、tracked cache 補助ファイルの継続管理。 | `.codex/spec-drafts/script-organization.md`, `.codex/open-issues/script-organization.md` |
+| 2026-06-19 | CARLA/動画/Excel補助スクリプトは正式機能ではなく、実験用として扱う。整理時は `experiments/` 配下へ置く前提とする。 | 学習・推論・評価の本流 CLI/モジュールと、用途限定の補助スクリプトを分離し、正式サポート範囲を明確にするため。 | `tools/` 配下の正式サポート対象として維持する案。 | `.codex/spec-drafts/script-organization.md`, `.codex/open-issues/script-organization.md` |
+| 2026-06-22 | `threshold.json` の分布統計として `p95`, `p99_5`, `p99_9`, `p99_99`, `p99_999` を追加保存する。小数分位点のキーは小数点を `_` に置換する。追加高分位点は既存の MAE 分布と percentile 算出方式で算出し、`threshold`、`temperature`、推論正規化、異常判定、CLI、既存 artifact 互換は変更しない。 | test-designer が `.codex/spec-drafts/add-parchange.md` をテスト可能かつ昇格 OK と判断し、人間判断待ちの未確定事項が残っていないため。保存 contract として観測可能であり、既存利用者への互換性を保ちながら必要な分布統計を追加できるため。 | ドット付きキー（例: `p99.5`）で保存する案、追加分位点を使って `threshold` や正規化範囲を変更する案、追加キーがない既存 artifact を非互換にする案。 | `.codex/spec-drafts/add-parchange.md`, `.codex/test-plans/add-parchange.md`, `.codex/test-cases/add-parchange.md`, `.codex/traceability/add-parchange.yaml` |
+| 2026-06-22 | 追加の保存分位点として p99.95 を加え、JSON キーは `p99_95` とする。 | 人間から「P99.95 も追加」と明示依頼があり、既存の小数分位点キー規則に一致するため。 | ドット付きキー `p99.95` で保存する案、既存 percentile キーを改名する案。 | `.codex/spec-drafts/add-parchange.md`, `.codex/work-notes/add-parchange.md` |
+| 2026-06-22 | `eval_score_csv.py` は ON/OFF 評価設定を 1 つの JSON で指定する `--config` を追加し、既存の `--config_on` / `--config_off` 形式も維持する。`--config` と分割 config の混在、または分割 config の片側欠落は usage error とする。単一 config では `evaluation.label_review_sheet` と `evaluation.normal_ledger_sheet` を必須とし、存在しない config path や必須キー欠落は対象 path と不足内容を示して失敗する。`--on_dir` / `--off_dir`、評価計算、出力契約、依存管理、Docker/CUDA/OS 要件は変更しない。 | test-designer が `.codex/spec-drafts/eval-score-csv-single-config.md` をテスト可能かつ昇格 OK と判断し、人間判断待ちの未確定事項が残っていないため。単一 config は運用時の指定ファイル数を減らしつつ、既存利用者の 2 config 起動方法を保てるため。 | `--config_on` / `--config_off` を廃止する案、`--config` と分割 config を混在させた場合に優先順位で解決する案、`evaluation.run_dir` から `--on_dir` / `--off_dir` を自動補完する案、ON/OFF 別の `accel_column_name` を単一 config 内に新スキーマとして追加する案。 | `.codex/spec-drafts/eval-score-csv-single-config.md`, `.codex/test-plans/eval-score-csv-single-config.md`, `.codex/test-cases/eval-score-csv-single-config.md`, `.codex/traceability/eval-score-csv-single-config.yaml` |

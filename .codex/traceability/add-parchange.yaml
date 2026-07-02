@@ -1,0 +1,120 @@
+feature: add-parchange
+phase: specification_test_design
+spec:
+  draft: .codex/spec-drafts/add-parchange.md
+  open_issues: .codex/open-issues/add-parchange.md
+  work_notes: .codex/work-notes/add-parchange.md
+  reviewed_latest_spec_designer_output: true
+  reviewed_summary: >
+    threshold.json stats expansion adds p95, p99_5, p99_9, p99_99, and p99_999
+    from the same MAE distribution as existing p10/p50/p90/p99/threshold, without changing
+    threshold semantics, temperature formula, score normalization, anomaly decision, CLI behavior,
+    or compatibility with existing artifacts missing those keys.
+testability:
+  status: ok_for_promotion
+  blockers: []
+  open_questions: []
+  rationale:
+    - Additional keys are observable in threshold.json and inference context dictionaries.
+    - Expected values are defined by numpy percentile on the same MAE distribution.
+    - Backward compatibility is observable by loading threshold stats without the new keys.
+    - Non-impact on scoring is observable by comparing context and score calculations with and without the new keys.
+test_plan: .codex/test-plans/add-parchange.md
+test_cases:
+  markdown: .codex/test-cases/add-parchange.md
+  data: .codex/test-cases/add-parchange.json
+acceptance_criteria:
+  AC-001:
+    description: "Mainstream standard training threshold.json preserves existing keys and saves p95, p99_5, p99_9, p99_99, p99_999."
+    test_cases:
+      - TC-01
+      - TC-03
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-002:
+    description: "Mainstream Nstep training threshold.json preserves existing keys and tail_steps and saves the additional percentile keys."
+    test_cases:
+      - TC-01
+      - TC-03
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-003:
+    description: "Legacy-compatible standard and Nstep training artifact paths save the same additional keys."
+    test_cases:
+      - TC-02
+      - TC-03
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-004:
+    description: "Additional key values match np.percentile on the same MAE distribution."
+    test_cases:
+      - TC-01
+      - TC-02
+      - TC-04
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-005:
+    description: "p99, p99_5, p99_9, p99_99, and p99_999 are monotonic non-decreasing within numeric tolerance."
+    test_cases:
+      - TC-01
+      - TC-04
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-006:
+    description: "With percentile=99.5, threshold equals p99_5 from the same MAE distribution."
+    test_cases:
+      - TC-01
+      - TC-02
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-007:
+    description: "Inference loaders accept existing threshold.json stats missing the additional keys."
+    test_cases:
+      - TC-05
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-008:
+    description: "Inference loaders keep present additional keys as float values in threshold/stat context."
+    test_cases:
+      - TC-06
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-009:
+    description: "Additional key presence does not change existing score normalization, thresholds, or anomaly decisions."
+    test_cases:
+      - TC-07
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+    status: planned_after_unlock
+  AC-010:
+    description: "CLI help, interactive startup contract, artifact paths, existing CSV output columns, dependencies, and runtime requirements remain unchanged."
+    test_cases:
+      - TC-08
+    automated_by:
+      - tests/test_add_parchange_acceptance.py
+      - tests/test_script_organization_smoke.py
+    manual_checks:
+      - Review implementation diff for no dependency-file changes caused by this feature.
+      - Review implementation diff for no CSV schema or artifact path changes outside threshold.json.
+    status: planned_after_unlock
+blocked_items: []
+red_command: python -m unittest tests.test_add_parchange_acceptance
+green_command: python -m unittest tests.test_add_parchange_acceptance tests.test_script_organization_smoke
+junit_xml_command: >
+  uv run pytest tests/test_add_parchange_acceptance.py --junit-xml=.codex/validation/artifacts/add-parchange/pytest.xml
+junit_xml_note: >
+  Candidate only if pytest is available or explicitly introduced; current observed test framework is unittest.
+implementation_waiting:
+  possible_from_test_design_side: true
+  condition: "spec-designer promotes the draft to docs/specs/** or otherwise records the approved specification."
+validation_environment:
+  primary: host_python
+  docker_required: false

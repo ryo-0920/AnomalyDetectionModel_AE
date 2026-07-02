@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "feature": "example-feature",
+  "overall_status": "green",
+  "pr_ready": true,
+  "spec_status": "ok",
+  "acceptance_status": "ok",
+  "test_status": "green",
+  "red_green_status": "ok",
+  "quality_status": "ok",
+  "required_fixes": [],
+  "code_review_findings": [],
+  "unverified_items": [],
+  "human_decision_required": [],
+  "commit": {
+    "ready": true,
+    "candidate_files": [
+      "src/example.py",
+      "tests/test_example.py",
+      ".codex/validation/example-feature.md",
+      ".codex/validation/example-feature.json"
+    ],
+    "exclude_files": [
+      ".codex/validation/artifacts/example-feature/example-test-report.xml"
+    ],
+    "notes": "Commit only the validated source, tests, specifications, and validation reports."
+  },
+  "commands": [
+    {
+      "phase": "red",
+      "command": "project-test-command --focus example-feature",
+      "exit_code": 1,
+      "result": "expected_failed",
+      "report_path": ".codex/validation/artifacts/example-feature/example-red.log"
+    },
+    {
+      "phase": "green",
+      "command": "project-test-command --report .codex/validation/artifacts/example-feature/example-test-report.xml",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": ".codex/validation/artifacts/example-feature/example-test-report.xml"
+    }
+  ],
+  "artifacts": {
+    "human_report": ".codex/validation/example-feature.md",
+    "junit_xml": ".codex/validation/artifacts/example-feature/example-test-report.xml"
+  }
+}

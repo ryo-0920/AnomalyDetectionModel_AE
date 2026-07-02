@@ -1016,7 +1016,7 @@ def main():
         "num_layers": 2,
         "dim_ff": 512,
         "dropout": 0.2,
-        "percentile": 99.5,
+        "percentile": 100,
         "out_dir": os.path.join("artifacts", "transformer_ae"),
         "val_ratio": 0.2,
         "max_norm": 1.0,

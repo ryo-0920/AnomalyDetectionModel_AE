@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "feature": "script-organization",
+  "overall_status": "unknown",
+  "pr_ready": false,
+  "spec_status": "ok",
+  "acceptance_status": "unverified",
+  "test_status": "green",
+  "red_green_status": "ok",
+  "quality_status": "warnings",
+  "required_fixes": [],
+  "code_review_findings": [
+    {
+      "severity": "follow_up",
+      "category": "runtime_coverage",
+      "path": "src/gofumi_ae/training/standard.py",
+      "finding": "Repo-root path resolution and legacy runtime import lookup are now verified, but end-to-end runtime behavior with real data/artifacts is still unverified.",
+      "recommendation": "Run a focused runtime fixture for AC-06 before treating the reorganization as release-ready."
+    },
+    {
+      "severity": "follow_up",
+      "category": "coverage_gap",
+      "path": "tests/test_script_organization_smoke.py",
+      "finding": "Current green evidence is centered on importability, legacy `--help`, experimental-script relocation, tracked-cache cleanup, and runtime path constants.",
+      "recommendation": "Add or run follow-up coverage for output contracts and non-TTY behavior."
+    }
+  ],
+  "unverified_items": [
+    "AC-06 existing output contract preservation remains unverified in a non-help runtime flow.",
+    "Interactive runtime behavior beyond import/setup is still unverified.",
+    "Non-TTY behavior was not rechecked in this green pass."
+  ],
+  "human_decision_required": [],
+  "commit": {
+    "ready": false,
+    "candidate_files": [
+      ".gitignore",
+      "1_transformer/train_transformer_autoencoder.py",
+      "1_transformer/train_score_csv.py",
+      "1_transformer/eval_score_csv.py",
+      "1_transformer/plot_timechart.py",
+      "app/collect_intentional_accel.py",
+      "app/export_results_excel.py",
+      "app/gofumi_accel_keyboard.py",
+      "app/pngtovideo.py",
+      "app/sample.py",
+      "experiments/",
+      "gofumi_ae/__init__.py",
+      "src/gofumi_ae/",
+      "tests/test_script_organization_smoke.py",
+      "docs/specs/overview.md",
+      "docs/specs/requirements.md",
+      "docs/specs/design.md",
+      "docs/specs/decision_log.md",
+      ".codex/test-plans/script-organization.md",
+      ".codex/test-cases/script-organization.md",
+      ".codex/traceability/script-organization.yaml",
+      ".codex/validation/script-organization.md",
+      ".codex/validation/script-organization.json"
+    ],
+    "exclude_files": [
+      "config/hyperparams_common.json",
+      "requirements.txt"
+    ],
+    "notes": "Focused acceptance smoke is green, but AC-06 and fuller runtime coverage remain open, so this is not PR-ready evidence yet."
+  },
+  "commands": [
+    {
+      "phase": "red",
+      "command": "python -m unittest tests.test_script_organization_smoke",
+      "exit_code": 1,
+      "result": "expected_failed",
+      "report_path": null
+    },
+    {
+      "phase": "green",
+      "command": "python -m unittest tests.test_script_organization_smoke",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    },
+    {
+      "phase": "manual",
+      "command": "python -c \"import gofumi_ae, gofumi_ae.cli.train, gofumi_ae.cli.score, gofumi_ae.cli.evaluate, gofumi_ae.cli.plot_timechart, gofumi_ae.models, gofumi_ae.training, gofumi_ae.inference, gofumi_ae.evaluation, gofumi_ae.visualization, gofumi_ae.datasets, gofumi_ae.ui; print('imports-ok')\"",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    },
+    {
+      "phase": "manual",
+      "command": "python 1_transformer/train_transformer_autoencoder.py --help",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    },
+    {
+      "phase": "manual",
+      "command": "python 1_transformer/train_score_csv.py --help",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    },
+    {
+      "phase": "manual",
+      "command": "python 1_transformer/eval_score_csv.py --help",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    },
+    {
+      "phase": "manual",
+      "command": "python 1_transformer/plot_timechart.py --help",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    },
+    {
+      "phase": "manual",
+      "command": "./.venv/bin/python -c \"import gofumi_ae.training.standard as ts, gofumi_ae.training.nstep as tn, gofumi_ae.inference.standard as ins, gofumi_ae.inference.nstep as inn; import models.transformer_autoencoder as legacy; print(ts.PROJECT_ROOT); print(tn.PROJECT_ROOT); print(ins.PROJECT_ROOT); print(inn.PROJECT_ROOT); print(ins.DEFAULT_HPARAMS_PATH); print(legacy.__file__)\"",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    },
+    {
+      "phase": "manual",
+      "command": "git ls-files 'desktop.ini' '1_transformer/desktop.ini' '1_transformer/models/__pycache__/*'",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    },
+    {
+      "phase": "validation",
+      "command": "python .agents/skills/run-feature-validation/scripts/validate_report.py .codex/validation/script-organization.json",
+      "exit_code": 0,
+      "result": "passed",
+      "report_path": null
+    }
+  ],
+  "artifacts": {
+    "human_report": ".codex/validation/script-organization.md",
+    "junit_xml": null
+  }
+}

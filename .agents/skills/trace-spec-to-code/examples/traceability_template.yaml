@@ -1,0 +1,29 @@
+feature: "<機能名>"
+specification: "docs/specs/<path>.md"
+branch: "feature/<name>"
+status: "下書き"
+
+requirements:
+  - id: "R1"
+    summary: "<必要な挙動>"
+    test_cases:
+      - path: ".codex/test-cases/<feature>.md"
+        case_id: "TC1"
+        notes: "<入力、期待値、判定方法>"
+    executable_acceptance_tests:
+      - path: "tests/<test_file>"
+        test: "<テスト名または手動チェック>"
+        status: "計画中"
+    validation:
+      - path: ".codex/validation/<feature>.md"
+        result: "未実行"
+    implementation:
+      - path: "src/<module>"
+        notes: "<この要求の実装方法>"
+    gaps:
+      - "<残っているギャップまたはなし>"
+
+decisions:
+  - date: "YYYY-MM-DD"
+    summary: "<判断と理由>"
+    source: "docs/specs/decision_log.md"

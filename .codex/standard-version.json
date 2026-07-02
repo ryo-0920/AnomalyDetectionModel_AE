@@ -1,0 +1,7 @@
+{
+  "standards_repo": "deepfusion-codex-standards",
+  "standards_commit": "397072b59c53b19de0cf4d50d56356c91103dcec",
+  "standards_dirty": false,
+  "templates": ["base", "python"],
+  "applied_at": "2026-06-19T00:52:07Z"
+}

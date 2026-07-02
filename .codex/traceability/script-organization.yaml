@@ -1,0 +1,68 @@
+feature: script-organization
+spec:
+  draft: .codex/spec-drafts/script-organization.md
+  open_issues: .codex/open-issues/script-organization.md
+test_plan: .codex/test-plans/script-organization.md
+test_cases: .codex/test-cases/script-organization.md
+acceptance_criteria:
+  AC-01:
+    description: "python 1_transformer/train_transformer_autoencoder.py --help succeeds."
+    test_cases:
+      - TC-02
+    automated_by:
+      - tests/test_script_organization_smoke.py
+    status: verified_smoke
+  AC-02:
+    description: "python 1_transformer/train_score_csv.py --help succeeds."
+    test_cases:
+      - TC-02
+    automated_by:
+      - tests/test_script_organization_smoke.py
+    status: verified_smoke
+  AC-03:
+    description: "python 1_transformer/plot_timechart.py --help succeeds."
+    test_cases:
+      - TC-02
+    automated_by:
+      - tests/test_script_organization_smoke.py
+    status: verified_smoke
+  AC-04:
+    description: "python 1_transformer/eval_score_csv.py --help succeeds."
+    test_cases:
+      - TC-02
+    automated_by:
+      - tests/test_script_organization_smoke.py
+    status: verified_smoke
+  AC-05:
+    description: "Old CLI paths keep default config path resolution."
+    test_cases:
+      - TC-03
+    status: planned
+  AC-06:
+    description: "train_score_csv.py keeps existing output contracts."
+    test_cases:
+      - TC-03
+      - TC-05
+    status: planned
+  AC-07:
+    description: "Main modules can be imported after reorganization."
+    test_cases:
+      - TC-01
+    automated_by:
+      - tests/test_script_organization_smoke.py
+    status: verified_smoke
+  AC-08:
+    description: "Wrapper and cache/output Git management policies are recorded."
+    test_cases:
+      - TC-07
+    status: verified_manual
+  AC-09:
+    description: "CARLA/video/Excel helper scripts are recorded as experimental and excluded from mandatory mainstream acceptance tests."
+    test_cases:
+      - TC-06
+      - TC-07
+    automated_by:
+      - tests/test_script_organization_smoke.py
+    status: verified_smoke
+blocked_items: []
+red_command: python -m unittest tests.test_script_organization_smoke
