@@ -6,6 +6,7 @@ datarecode_test/
 datarecode_train/
 artifacts/
 output/
+outputs/
 result/
 1_transformer/result/
 

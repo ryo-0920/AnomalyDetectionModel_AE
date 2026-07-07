@@ -39,12 +39,14 @@ def read_csv_to_df(csv_path: str) -> pd.DataFrame:
     return df
 def get_time_axis(df: pd.DataFrame) -> Tuple[np.ndarray, str]:
     """
-    時間軸を返す。frame列があればそれを使用、なければインデックス。
+    時間軸を返す。time列があればそれを優先して使用し、次にframe、最後にインデックス。
     """
-    if "frame" in df.columns:
-        return df["frame"].values, "frame"
-    else:
-        return df.index.values, "index"
+    for col in ("time", "frame"):
+        if col in df.columns:
+            values = pd.to_numeric(df[col], errors="coerce")
+            if values.notna().any():
+                return values.to_numpy(), col
+    return df.index.values, "index"
 def collect_signals_by_category(df: pd.DataFrame) -> List[str]:
     """
     CATEGORIESの順に、存在する列だけを抽出してフラットなシグナル一覧を作る。
@@ -245,7 +247,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--csv",
-        default="1_transformer/result/ON_par100_50step_gun3",
+        default="1_transformer/result/OFF_par99_9_50step_gun3",
         help=(
             "CSVファイル, ディレクトリ, もしくはグロブパターンを指定できます "
             "(例: --csv result, --csv result\\*.csv, --csv result\\foo.csv)"

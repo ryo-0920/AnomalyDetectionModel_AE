@@ -23,6 +23,10 @@ import torch.nn.functional as F
 from sklearn.preprocessing import StandardScaler
 import joblib
 from torch.utils.data import DataLoader, Dataset, Subset
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.normpath(os.path.join(SCRIPT_DIR, ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 from models.transformer_autoencoder import CausalTransformerAutoencoder
 import bisect
 import platform
@@ -816,20 +820,20 @@ def compute_threshold_on_dataset(model, dataset, device, percentile=99.5, use_am
         raise ValueError("MAE 分布が空です（学習データが不正の可能性）")
     mean = float(np.mean(errs_arr))
     std  = float(np.std(errs_arr, ddof=1))
-    p10 = float(np.percentile(errs_arr, 10))
     p50 = float(np.percentile(errs_arr, 50))
-    p90 = float(np.percentile(errs_arr, 90))
-    p99 = float(np.percentile(errs_arr, 99))
+    p99_9 = float(np.percentile(errs_arr, 99.9))
+    p99_95 = float(np.percentile(errs_arr, 99.95))
+    p99_97 = float(np.percentile(errs_arr, 99.97))
     thr = float(np.percentile(errs_arr, percentile))
-    temperature = float(max((p90 - p50) / 6.0, 1e-6))
+    temperature = float(max((p99_9 - p50) / 6.0, 1e-6))
     return {
         "threshold": thr,
         "mean": mean,
         "std": std,
-        "p10": p10,
         "p50": p50,
-        "p90": p90,
-        "p99": p99,
+        "p99_9": p99_9,
+        "p99_95": p99_95,
+        "p99_97": p99_97,
         "percentile": float(percentile),
         "temperature": temperature,
         "n_samples": int(errs_arr.size),
@@ -1176,7 +1180,7 @@ def main():
     )
     print(f"Threshold (p{args.percentile}): {threshold_stats['threshold']:.6f} "
           f"(mean={threshold_stats['mean']:.6f}, std={threshold_stats['std']:.6f}, "
-          f"p10={threshold_stats['p10']:.6f}, p99={threshold_stats['p99']:.6f})")
+          f"p99={threshold_stats['p99']:.6f}, p99.97={threshold_stats['p99.97']:.6f})")
     config = build_config(args, layout, metrics, csv_paths)
     save_artifacts(args.out_dir, model, scaler, config, threshold_stats)
     print(f"[RESULT] 最終エポックロス: {metrics['train_masked_mse']:.6f} / 最良エポック: {metrics['best_epoch']} / 最良ロス: {metrics['best_loss']:.6f}")
