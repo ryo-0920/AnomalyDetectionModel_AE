@@ -6,6 +6,14 @@
     "header_row": 2,
     "file_name_column": "時系列csvファイルパス"
   },
+  "ledger_fallbacks": [
+    {
+      "path": "C:\\Users\\Z628058\\トヨタ自動車株式会社\\4DAA6G_ファイル管理 - TMC+派遣\\10_市場データ管理台帳\\管理台帳\\共有版__急アクセル系_市技報事故および市場事故管理台帳_秘密情報なし.xlsx",
+      "sheet": "事故前後走行データ管理台帳",
+      "header_row": 5,
+      "file_name_column": "TMC/TTDC提供ファイル名"
+    }
+  ],
   "network_roots": [
     "C:\\Users\\Z628058\\AppData\\Roaming\\Microsoft\\Windows\\Network Shortcuts\\10_市場データ管理台帳"
   ],
@@ -16,56 +24,56 @@
     "O": {
       "enabled": false,
       "excel_col": "O",
-      "header_name": "valid群番号",
+      "header_name": ["valid群番号.1"],
       "mode": "include",
-      "values": [1]
+      "values": []
     },
     "P": {
       "enabled": false,
       "excel_col": "P",
-      "header_name": "群1",
+      "header_name": ["群1", "群1.1"],
       "mode": "include",
       "values": ["Train"]
     },
     "Q": {
       "enabled": false,
       "excel_col": "Q",
-      "header_name": "群2",
+      "header_name": ["群2", "群2.1"],
       "mode": "include",
       "values": []
     },
     "R": {
       "enabled": true,
       "excel_col": "R",
-      "header_name": "群3",
+      "header_name": ["群3", "群3.1"],
       "mode": "include",
       "values": ["Train"]
     },
     "S": {
       "enabled": false,
       "excel_col": "S",
-      "header_name": "群4",
+      "header_name": ["群4", "群4.1"],
       "mode": "include",
       "values": []
     },
     "T": {
       "enabled": false,
       "excel_col": "T",
-      "header_name": "群5",
+      "header_name": ["群5", "群5.1"],
       "mode": "include",
       "values": []
     },
     "U": {
       "enabled": false,
       "excel_col": "U",
-      "header_name": "優先順位",
+      "header_name": ["優先順位", "通し優先順位", "全体優先順位", "各群優先順位"],
       "mode": "include",
       "values": []
     },
     "V": {
       "enabled": true,
       "excel_col": "V",
-      "header_name": "推奨 ('-'以外全部学習用)",
+      "header_name": ["推奨 ('-'以外全部学習用)", "推奨.1", "推奨"],
       "mode": "include",
       "values": ["学習/テスト推奨"]
     }

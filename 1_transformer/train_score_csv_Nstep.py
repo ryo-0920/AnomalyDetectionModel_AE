@@ -20,8 +20,8 @@ BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = (BASE_DIR / "..").resolve()
 DEFAULT_INPUT_DIR = (BASE_DIR / ".." / "datarecode_test").resolve()
 DEFAULT_HPARAMS_PATH = (PROJECT_ROOT / "config" / "hyperparams_common.json").resolve()
-DEFAULT_META_CSV_PATH = (PROJECT_ROOT / "config" / "inference_ground_truth.csv").resolve()
-DEFAULT_TAGGED_FILTER_INFER_PATH = (PROJECT_ROOT / "config" / "tagged_dataset_filter_infer.json").resolve()
+DEFAULT_TAGGED_DATASET_INFERENCE_CONFIG_PATH = (PROJECT_ROOT / "config" / "tagged_dataset_inference.json").resolve()
+DEFAULT_INFER_RUNTIME_CONFIG_PATH = (PROJECT_ROOT / "config" / "inference_runtime.json").resolve()
 LEGACY_DEFAULT_ARTIFACTS_DIR = (PROJECT_ROOT / "artifacts" / "transformer_ae").resolve()
 DEFAULT_VALID_RESULTS_DIR = (PROJECT_ROOT / "output" / "Valid_results").resolve()
 MODEL_NAME = "transformer_ae"
@@ -346,7 +346,7 @@ def build_inference_context(
 # =========================================================
 def load_inference_time_range_config(config_path: str) -> Optional[Dict[str, Any]]:
     """
-    tagged_dataset_filter_infer.json から inference_time_range 設定を読む。
+    tagged dataset 設定から inference_time_range 設定を読む。
     設定が無い / enabled=false / 読込エラー の場合は None を返す。
     """
     path = Path(config_path)
@@ -357,6 +357,9 @@ def load_inference_time_range_config(config_path: str) -> Optional[Dict[str, Any
             cfg = json.load(f)
     except Exception:
         return None
+    infer_cfg = cfg.get("infer")
+    if isinstance(infer_cfg, dict):
+        cfg = infer_cfg
     tr = cfg.get("inference_time_range")
     if not isinstance(tr, dict):
         return None
@@ -376,7 +379,40 @@ def load_inference_time_range_config(config_path: str) -> Optional[Dict[str, Any
         "column": str(column),
         "start": _to_opt_float(start),
         "end": _to_opt_float(end),
+        "expected_step": float(tr.get("expected_step", 0.1)),
+        "tolerance": float(tr.get("tolerance", 0.02)),
+        "irregular_time_policy": str(tr.get("irregular_time_policy", "warn")).strip().lower(),
     }
+
+
+def load_inference_runtime_config(config_path: str) -> Dict[str, Any]:
+    path = Path(config_path)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _check_time_axis_irregular(
+    time_values: np.ndarray,
+    expected_step: float,
+    tolerance: float,
+) -> Tuple[bool, Optional[float]]:
+    finite = np.isfinite(time_values)
+    if int(finite.sum()) < 3:
+        return False, None
+    t = time_values[finite]
+    dt = np.diff(t)
+    dt = dt[np.isfinite(dt)]
+    dt = dt[dt > 0.0]
+    if dt.size == 0:
+        return False, None
+    max_dev = float(np.max(np.abs(dt - float(expected_step))))
+    return max_dev > float(tolerance), max_dev
 # =========================================================
 # 4) 入力列挙（単一ファイル／ディレクトリ・再帰）
 # =========================================================
@@ -403,6 +439,18 @@ def list_input_files(csv_arg: str) -> List[str]:
         return [str(input_path)]
     else:
         raise FileNotFoundError(f"--csv not found: {input_path.resolve(strict=False)}")
+
+
+def _resolve_input_directory(csv_arg: str) -> Optional[str]:
+    normalized_arg = str(csv_arg or "").strip()
+    if len(normalized_arg) >= 2 and normalized_arg[0] == normalized_arg[-1] and normalized_arg[0] in {'"', "'"}:
+        normalized_arg = normalized_arg[1:-1].strip()
+    if any(ch in normalized_arg for ch in "*?[]"):
+        return None
+    input_path = Path(normalized_arg).expanduser()
+    if input_path.is_dir():
+        return str(input_path)
+    return None
 def _normalize_path_key(path_str: str) -> str:
     return os.path.normpath(str(path_str)).replace("\\", "/").lower()
 def _coerce_optional_float(value: Any) -> Optional[float]:
@@ -813,6 +861,24 @@ def compute_stream_scores_for_file(
     t_arr = pd.to_numeric(df[time_col], errors="coerce").to_numpy(dtype=np.float32)
     start_val = time_range.get("start", None)
     end_val = time_range.get("end", None)
+
+    irregular_policy = str(time_range.get("irregular_time_policy", "warn")).strip().lower()
+    if irregular_policy not in {"ignore", "warn", "error"}:
+        irregular_policy = "warn"
+    irregular, max_dev = _check_time_axis_irregular(
+        t_arr,
+        expected_step=float(time_range.get("expected_step", 0.1)),
+        tolerance=float(time_range.get("tolerance", 0.02)),
+    )
+    if irregular:
+        msg = (
+            f"{Path(csv_path).name}: irregular time intervals detected "
+            f"(max deviation={max_dev:.6f})"
+        )
+        if irregular_policy == "error":
+            raise ValueError(msg)
+        if irregular_policy == "warn":
+            print(f"[WARN] {msg}")
     # ストリーム用バッファ
     buf_norm: Deque[np.ndarray] = deque(maxlen=seq_len)  # 正規化＋one-hot 結合後
     buf_raw: Deque[np.ndarray] = deque(maxlen=seq_len)   # 欠損補完後の元スケール（F）
@@ -952,14 +1018,20 @@ def main():
     )
     parser.add_argument(
         "--meta_csv",
-        default=str(DEFAULT_META_CSV_PATH),
+        default=None,
         help="Optional metadata CSV path (label/abnormal_start_time/collision_time).",
     )
     parser.add_argument(
         "--file_score_mode",
+        choices=["tail", "max", "both"],
+        default=None,
+        help="File-level score output mode. both=save tail and max scores.",
+    )
+    parser.add_argument(
+        "--file_eval_mode",
         choices=["tail", "max"],
-        default="tail",
-        help="File-level probability aggregation mode for confusion matrix/ROC.",
+        default=None,
+        help="Mode used for confusion matrix/ROC evaluation.",
     )
     parser.add_argument(
         "--recursive",
@@ -971,7 +1043,26 @@ def main():
         default=None, 
         help="Legacy CSV output directory (optional)"
     )
+    parser.add_argument(
+        "--runtime_config",
+        default=str(DEFAULT_INFER_RUNTIME_CONFIG_PATH),
+        help="Optional runtime settings JSON path.",
+    )
     args = parser.parse_args()
+
+    runtime_cfg = load_inference_runtime_config(args.runtime_config)
+
+    file_score_mode = str(args.file_score_mode or runtime_cfg.get("file_score_mode", "both")).strip().lower()
+    if file_score_mode not in {"tail", "max", "both"}:
+        file_score_mode = "both"
+    file_eval_mode = str(args.file_eval_mode or runtime_cfg.get("file_eval_mode", "tail")).strip().lower()
+    if file_eval_mode not in {"tail", "max"}:
+        file_eval_mode = "tail"
+    if file_score_mode in {"tail", "max"} and args.file_eval_mode is None and "file_eval_mode" not in runtime_cfg:
+        file_eval_mode = file_score_mode
+
+    meta_csv_path = args.meta_csv if args.meta_csv else runtime_cfg.get("meta_csv")
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ensure_tty()
     artifacts_default = args.artifacts_dir if args.artifacts_dir else resolve_default_artifacts_dir()
@@ -984,7 +1075,7 @@ def main():
         default_target=str(args.csv),
         project_root=str(PROJECT_ROOT),
         title="Select scoring input target",
-        include_tagged_option=True,
+        include_tagged_option=False,
     )
     print(f"[INFO] artifacts_dir={artifacts_dir}")
     print(f"[INFO] csv_target={csv_target}")
@@ -994,23 +1085,31 @@ def main():
     ctx = build_inference_context(cfg, thr_info, scaler, paths["model_path"], device)
     # 推論時 time 範囲設定の読み込み
     inference_time_range = load_inference_time_range_config(
-        str(DEFAULT_TAGGED_FILTER_INFER_PATH)
+        str(DEFAULT_TAGGED_DATASET_INFERENCE_CONFIG_PATH)
     )
     if inference_time_range is None:
         raise ValueError(
-            f"inference_time_range is required but not found or disabled in: {DEFAULT_TAGGED_FILTER_INFER_PATH}"
+            f"inference_time_range is required but not found or disabled in: {DEFAULT_TAGGED_DATASET_INFERENCE_CONFIG_PATH}"
         )
     # 入力列挙
-    if csv_target == TAGGED_DATASET_TOKEN:
+    input_dir_override = None
+    if csv_target != TAGGED_DATASET_TOKEN:
+        input_dir_override = _resolve_input_directory(csv_target)
+    if csv_target == TAGGED_DATASET_TOKEN or input_dir_override is not None:
         try:
             files, report = build_tagged_dataset_csvs_from_config(
-                config_path=str(DEFAULT_TAGGED_FILTER_INFER_PATH),
+                config_path=str(DEFAULT_TAGGED_DATASET_INFERENCE_CONFIG_PATH),
                 pattern="*.csv",
+                override_search_roots=[input_dir_override] if input_dir_override is not None else None,
             )
         except Exception as e:
             print(f"[WARN] tagged dataset preparation failed: {repr(e)} -> inference is skipped.")
             return
+        if input_dir_override is not None:
+            print(f"[INFO] input directory override for tagged matching: {input_dir_override}")
         print(f"[INFO] tagged filter config: {report['config_path']}")
+        if report.get("config_profile"):
+            print(f"[INFO] tagged filter profile: {report['config_profile']}")
         print(f"[INFO] ledger file-name column: {report['file_name_column']}")
         print(
             f"[INFO] ledger rows: total={report['rows_total']}, "
@@ -1057,10 +1156,11 @@ def main():
         print(f"[INFO] tagged usable files: {report['usable_count']}")
     else:
         files = list_input_files(csv_target)
-    meta_map = load_optional_meta_map(args.meta_csv, str(PROJECT_ROOT))
+    meta_map = load_optional_meta_map(meta_csv_path, str(PROJECT_ROOT))
     # 出力ディレクトリ設定
     # 1) TF-style valid results (run_dir)
-    valid_results_dir = os.path.abspath(str(DEFAULT_VALID_RESULTS_DIR))
+    valid_results_dir_setting = runtime_cfg.get("valid_results_dir", str(DEFAULT_VALID_RESULTS_DIR))
+    valid_results_dir = os.path.abspath(str(valid_results_dir_setting))
     os.makedirs(valid_results_dir, exist_ok=True)
     ts_str = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     run_dir = os.path.join(valid_results_dir, f"{ts_str}_{MODEL_NAME}_inference_csv")
@@ -1075,8 +1175,8 @@ def main():
         else:
             out_dir = os.path.abspath(leg)
     else:
-        # デフォルトは PROJECT_ROOT/result/OFF_pa99 (以前の相対パスと同等の安全な場所)
-        out_dir = os.path.abspath(os.path.join(str(PROJECT_ROOT), "result", "OFF_pa99"))
+        legacy_default = runtime_cfg.get("legacy_output_dir", os.path.join(str(PROJECT_ROOT), "result", "OFF_pa99"))
+        out_dir = os.path.abspath(str(legacy_default))
     os.makedirs(out_dir, exist_ok=True)
     # デバッグ用ログ（ここで run_dir/out_dir は確実に定義されている）
     print(f"[INFO] legacy csv output dir: {out_dir}")
@@ -1086,8 +1186,9 @@ def main():
         "model": MODEL_NAME,
         "csv_target": csv_target,
         "artifacts_dir": artifacts_dir,
-        "meta_csv": str(args.meta_csv),
-        "file_score_mode": args.file_score_mode,
+        "meta_csv": str(meta_csv_path) if meta_csv_path else "",
+        "file_score_mode": file_score_mode,
+        "file_eval_mode": file_eval_mode,
         "num_files": int(len(files)),
         "y_conv_threshold": float(ctx["y_conv_threshold"]),
         "y_pre_threshold": float(ctx["y_pre_threshold"]),
@@ -1140,18 +1241,30 @@ def main():
             score_series = pd.to_numeric(df_out["y_conv_score"], errors="coerce").to_numpy(dtype=np.float32)
             y_pre_series = pd.to_numeric(df_out["y_pre"], errors="coerce").to_numpy(dtype=np.float32)
             y_conv_series = pd.to_numeric(df_out["y_conv"], errors="coerce").to_numpy(dtype=np.float32)
-            file_prob = pick_file_probability(score_series, mode=args.file_score_mode)
+            file_prob_tail = pick_file_probability(score_series, mode="tail")
+            file_prob_max = pick_file_probability(score_series, mode="max")
+
+            if file_score_mode == "tail":
+                file_prob_eval = file_prob_tail
+            elif file_score_mode == "max":
+                file_prob_eval = file_prob_max
+            else:
+                file_prob_eval = file_prob_tail if file_eval_mode == "tail" else file_prob_max
+
             file_pred = None
-            if file_prob is not None:
-                file_pred = int(file_prob >= float(ctx["y_conv_threshold"]))
+            if file_prob_eval is not None:
+                file_pred = int(file_prob_eval >= float(ctx["y_conv_threshold"]))
             file_records.append(
                 {
                     "csv_path": str(csv_path),
                     "label": label,
                     "label_source": label_source,
-                    "file_prob": file_prob,
-                    "file_pred": file_pred,
-                    "file_score_mode": args.file_score_mode,
+                    "file_prob_tail": file_prob_tail,
+                    "file_prob_max": file_prob_max,
+                    "file_prob_eval": file_prob_eval,
+                    "file_pred_eval": file_pred,
+                    "file_score_mode": file_score_mode,
+                    "file_eval_mode": file_eval_mode,
                     "y_conv_threshold": float(ctx["y_conv_threshold"]),
                     "abnormal_start_time": ast,
                     "collision_time": ct,
@@ -1187,11 +1300,11 @@ def main():
     if file_records:
         valid_rows = [
             r for r in file_records
-            if r.get("label") in (0, 1) and r.get("file_prob") is not None and np.isfinite(float(r["file_prob"]))
+            if r.get("label") in (0, 1) and r.get("file_prob_eval") is not None and np.isfinite(float(r["file_prob_eval"]))
         ]
         if valid_rows:
             y_true = np.asarray([int(r["label"]) for r in valid_rows], dtype=np.int32)
-            y_score = np.asarray([float(r["file_prob"]) for r in valid_rows], dtype=np.float32)
+            y_score = np.asarray([float(r["file_prob_eval"]) for r in valid_rows], dtype=np.float32)
             save_confusion_and_roc(
                 run_dir=run_dir,
                 model_name=MODEL_NAME,

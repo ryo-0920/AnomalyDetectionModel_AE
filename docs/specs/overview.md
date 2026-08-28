@@ -52,8 +52,8 @@
 - `02_20260213_dataset`
 
 `tagged dataset` を選んだ場合は、設定ファイルを使って台帳フィルタを適用する。
-- 学習時: `config/tagged_dataset_filter_train.json`
-- 推論時: `config/tagged_dataset_filter_infer.json`
+- 学習時: `config/tagged_dataset_train.json`
+- 推論時: `config/tagged_dataset_inference.json`
 
 設定ファイルの `aq_to_ay_filters` で AQ〜AY を `enabled + mode(include/exclude) + values(複数値)` で定義し、
 `combine=AND` で絞り込む。ファイル名突合は `TTDC提供ファイル名(タグ情報あり)` を基準に、拡張子を除いた stem 一致で行う。

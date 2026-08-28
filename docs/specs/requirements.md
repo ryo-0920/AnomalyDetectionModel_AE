@@ -21,8 +21,8 @@
 ### R-003f: タグ付けデータ選択（台帳連携）
 - 学習データセット選択に `tagged dataset (ledger + ver_tag001/2/3)` を追加すること。
 - `tagged dataset` 選択時は設定ファイルを読み込み、以下で学習対象CSVを決定すること。
-  - 学習用設定: `config/tagged_dataset_filter_train.json`
-  - 推論用設定: `config/tagged_dataset_filter_infer.json`
+  - 学習用設定: `config/tagged_dataset_train.json`
+  - 推論用設定: `config/tagged_dataset_inference.json`
   - 設定項目: `enabled`, `ledger`, `network_roots`, `aq_to_ay_filters`, `combine`, `sampling`
 - `aq_to_ay_filters` は AQ〜AY 列ごとに `mode`（`include` / `exclude`）と `values`（複数値）を持ち、`enabled=true` の列だけを適用すること。
 - 複数列フィルタは `combine=AND` で評価すること。
@@ -136,7 +136,7 @@
 - `--on_dir`, `--off_dir`, `--out_dir`, `--fpr_targets`, `--score_col`, `--verbose` の意味を変更しないこと。
 - `--on_dir` と `--off_dir` は引き続き CLI 引数として指定し、`evaluation.run_dir` をこの変更だけを理由に入力ディレクトリの既定値として採用しないこと。
 - per-file summary、混同行列、ROC、区間別集計、plot の算出ロジックと出力ファイル名を変更しないこと。
-- `config/tagged_dataset_filter_eval_ON.json` と `config/tagged_dataset_filter_eval_OFF.json` は、この変更だけを理由に削除、統合、リネームしないこと。
+- 評価用設定は `config/tagged_dataset_inference.json` の `evaluation_on` と `evaluation_off` を正本とすること。
 
 ## 2. 非機能要件
 - 既存CLI引数との後方互換性を可能な限り維持すること。
@@ -149,9 +149,9 @@
 - TTY実行時に optimizer と dataset の対話選択が表示されること。
 - dataset 選択で「候補一覧」「manual input」が選べること。
 - dataset 選択で `tagged dataset (ledger + ver_tag001/2/3)` が選べること。
-- `tagged dataset` 選択時に `config/tagged_dataset_filter_train.json` を参照して AQ〜AY フィルタが適用されること。
+- `tagged dataset` 選択時に `config/tagged_dataset_train.json` を参照して AQ〜AY フィルタが適用されること。
 - TTY実行時に `train_score_csv.py` で artifacts とスコア対象の対話選択が表示されること。
-- `train_score_csv.py` のスコア対象で `tagged dataset` を選択した場合、`config/tagged_dataset_filter_infer.json` が適用されること。
+- `train_score_csv.py` のスコア対象で `tagged dataset` を選択した場合、`config/tagged_dataset_inference.json` が適用されること。
 - `train_score_csv.py` 実行後に、従来の `result/*_anomaly.csv` と TF互換推論結果フォルダの両方が生成されること。
 - メタCSVなしでも推論は継続し、可能な範囲で評価出力が生成されること。
 - TTY実行時に `plot_timechart.py` で可視化対象の対話選択が表示されること。
@@ -177,5 +177,5 @@
 - `eval_score_csv.py` で `--config` がなく `--config_on` または `--config_off` の片方だけを指定した場合、usage error になり、評価処理を開始しないこと。
 - `eval_score_csv.py` の単一 config に `evaluation.label_review_sheet` または `evaluation.normal_ledger_sheet` が不足する場合、対象 path と不足キーを示して失敗すること。
 - `eval_score_csv.py` で存在しない config path を指定した場合、対象 path を示して失敗すること。
-- 2 config 形式で既存の `config/tagged_dataset_filter_eval_ON.json` と `config/tagged_dataset_filter_eval_OFF.json` を指定する起動方法が引き続き受理されること。
+- `--config` 単独指定では `config/tagged_dataset_inference.json` から `evaluation_on` と `evaluation_off` が読めること。
 - `eval_score_csv.py` の単一 config 形式と 2 config 形式のどちらでも、`--on_dir`, `--off_dir`, `--out_dir`, `--fpr_targets`, `--score_col`, `--verbose` の意味と出力契約が変わらないこと。

@@ -1,0 +1,25 @@
+{
+  "_comment": "列名対応定義ファイル — 仕様書 §6.1 参照。value に実際の CSV 列名を記載する。未定義の場合は空文字のままとする（空文字の場合は特徴量名をそのまま列名として使用する）。",
+  "column_map": {
+    "accelerationfb":       "accelerationfb",
+    "accelerationlr":       "accelerationlr",
+    "accelpedalangle":      "accelpedalangle",
+    "angularvelocity":      "angularvelocity",
+    "atshiftposition":      "atshiftposition",
+    "brake":                "brake",
+    "parkingbrake":         "parkingbrake",
+    "speed":                "speed",
+    "steeringangle":        "steeringangle",
+    "wheelspeedfl":         "wheelspeedfl",
+    "wheelspeedfr":         "wheelspeedfr",
+    "wheelspeedrl":         "wheelspeedrl",
+    "wheelspeedrr":         "wheelspeedrr",
+    "abscontrol":           "abscontrol",
+    "brakepedal":           "brakepedal",
+    "brakepressure":        "brakepressure",
+    "trccontrol":           "trccontrol",
+    "turnlampswitchstatus": "turnlampswitchstatus",
+    "vsccontrol":           "vsccontrol"
+  },
+  "time_column": "time"
+}

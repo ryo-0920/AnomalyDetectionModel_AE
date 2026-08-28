@@ -1,5 +1,4 @@
 import argparse
-import importlib.util
 import json
 import os
 import sys
@@ -12,29 +11,63 @@ import torch
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.normpath(os.path.join(SCRIPT_DIR, ".."))
-TRAIN_MODULE_DIR = os.path.join(PROJECT_ROOT, "1_transformer")
-TRAIN_MODULE_PATH = os.path.join(TRAIN_MODULE_DIR, "train_transformer_autoencoder.py")
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+LEGACY_DIR = os.path.join(PROJECT_ROOT, "1_transformer")
 
-if TRAIN_MODULE_DIR not in sys.path:
-    sys.path.insert(0, TRAIN_MODULE_DIR)
+for _p in (SRC_DIR, PROJECT_ROOT, LEGACY_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-if os.path.exists(TRAIN_MODULE_PATH):
-    spec = importlib.util.spec_from_file_location("train_transformer_autoencoder", TRAIN_MODULE_PATH)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load module spec from {TRAIN_MODULE_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    read_csv_lower = module.read_csv_lower
-    require_columns = module.require_columns
-    preprocess_df_for_training = module.preprocess_df_for_training
-    list_csvs_in_dir = module.list_csvs_in_dir
-    FEATURES = module.FEATURES
-    FEATURE_RULES = module.FEATURE_RULES
-    CATEGORY_MAPS = module.CATEGORY_MAPS
-    CATEGORICAL_FEATURES = module.CATEGORICAL_FEATURES
-    DEFAULT_UNKNOWN_ID = module.DEFAULT_UNKNOWN_ID
-else:
-    raise ImportError(f"Transform module not found at: {TRAIN_MODULE_PATH}")
+# 学習コード（nstep.py）から関数・クラスをインポート（§1.1）
+from gofumi_ae.training.nstep import (  # noqa: E402  実環境に合わせて修正
+    initialize_from_definition,
+    read_csv_lower,
+    require_columns,
+    preprocess_df_for_training,
+    list_csvs_in_dir,
+    SequenceDatasetMasked,
+    SequenceDatasetMaskedSegments,
+    onehot_encode_df,
+)
+from gofumi_ae.config import extract_model_config_from_definition  # noqa: E402
+from gofumi_ae.datasets.tagged_dataset import (  # noqa: E402
+    build_tagged_dataset_csvs_from_config,
+    _normalize_file_stem,
+)
+from models.transformer_autoencoder import CausalTransformerAutoencoder  # noqa: E402
+import gofumi_ae.training.nstep as _nstep  # noqa: E402
+
+# 定義ファイルを読み込んでグローバル変数を初期化する（§1.1）
+_DEFINITION_PATH = os.path.join(PROJECT_ROOT, "config", "definition.json")
+_ANALYZE_CONFIG_PATH = os.path.join(SCRIPT_DIR, "analyze_config.json")
+_definition = initialize_from_definition(_DEFINITION_PATH)
+
+# 初期化後にグローバル変数のエイリアスを作成（initialize_from_definition 呼び出し後でないと空のまま）
+FEATURES: List[str] = _nstep.FEATURES
+FEATURE_RULES: Dict[str, Any] = _nstep.FEATURE_RULES
+CATEGORICAL_FEATURES: List[str] = _nstep.CATEGORICAL_FEATURES
+DEFAULT_UNKNOWN_ID: float = _nstep.DEFAULT_UNKNOWN_ID
+CATEGORY_MAPS: Dict[str, Dict[str, float]] = _nstep.CATEGORY_MAPS
+DEFAULT_RULE: Dict[str, Any] = _nstep.DEFAULT_RULE
+FRAME_RANGE_CONFIG: Dict[str, Any] = _definition.get('frame_range_config', {})
+
+
+def load_analyze_config(config_path: str) -> Dict[str, Any]:
+    if not os.path.exists(config_path):
+        return {}
+    with open(config_path, "r", encoding="utf-8-sig") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Analyze config must be a JSON object: {config_path}")
+    return data
+
+
+def resolve_setting(cli_value: Any, config: Dict[str, Any], key: str, fallback: Any = None) -> Any:
+    if cli_value is not None:
+        return cli_value
+    if key in config and config[key] is not None:
+        return config[key]
+    return fallback
 
 
 def load_hparams(hparams_path: str) -> Dict[str, Any]:
@@ -84,7 +117,7 @@ def load_model_artifacts(artifacts_dir: str) -> Tuple[Any, Any, Dict[str, Any], 
     dropout = float(config.get("dropout", 0.1))
     max_len = int(config.get("seq_len", 1000))
 
-    model = module.CausalTransformerAutoencoder(
+    model = CausalTransformerAutoencoder(
         input_dim=input_dim,
         d_model=d_model,
         nhead=nhead,
@@ -130,7 +163,7 @@ def prepare_reconstruction_input(
 
     X_cont = scaler.transform(df[continuous_features].astype(np.float32).to_numpy()).astype(np.float32)
     specs = build_onehot_specs_from_layout(layout)
-    X_cat, _ = module.onehot_encode_df(df, specs)
+    X_cat, _ = onehot_encode_df(df, specs)
     if X_cat.size == 0:
         return X_cont
     return np.concatenate([X_cont, X_cat], axis=1).astype(np.float32)
@@ -279,6 +312,56 @@ def get_csv_paths(csv: str, csvdir: str, pattern: str) -> List[str]:
     if not unique_paths:
         raise ValueError(f"No CSV files found in {source_dir} matching pattern {pattern}")
     return unique_paths
+
+
+def get_train_csv_paths(csv: str, csvdir: str, pattern: str, train_filter_config_path: str) -> List[str]:
+    source_paths = get_csv_paths(csv, csvdir, pattern)
+    tagged_paths, _report = build_tagged_dataset_csvs_from_config(train_filter_config_path, pattern)
+    tagged_stems = {
+        _normalize_file_stem(os.path.basename(path))
+        for path in tagged_paths
+    }
+    filtered_paths = [
+        path for path in source_paths
+        if _normalize_file_stem(os.path.basename(path)) in tagged_stems
+    ]
+    if not filtered_paths:
+        raise ValueError(
+            "No train CSV files remained after intersecting -i source files with tagged_dataset_train.json"
+        )
+    return sorted({os.path.normpath(path) for path in filtered_paths})
+
+
+def extract_range_indices(df: pd.DataFrame, seq_len: int, mode: str) -> Tuple[int, int]:
+    filter_col = FRAME_RANGE_CONFIG.get("filter_column", "time")
+    start_value = float(FRAME_RANGE_CONFIG.get("start_value", 0))
+    end_value = float(FRAME_RANGE_CONFIG.get("end_value", 0))
+
+    filter_col_norm = str(filter_col).strip().lower()
+    if filter_col_norm not in df.columns:
+        raise ValueError(f"frame_range filter_column '{filter_col}' not found")
+
+    n_rows = int(len(df))
+    filter_values = pd.to_numeric(df[filter_col_norm], errors="coerce").to_numpy(dtype=float)
+    mask = np.isfinite(filter_values)
+    if not np.any(mask):
+        raise ValueError(f"no valid values in frame_range filter column '{filter_col}'")
+
+    actual_indices = np.where(mask)[0]
+    frame_idx_start = actual_indices[np.argmin(np.abs(filter_values[mask] - start_value))]
+    frame_idx_end = actual_indices[np.argmin(np.abs(filter_values[mask] - end_value))]
+    if frame_idx_end <= frame_idx_start:
+        raise ValueError(f"invalid frame range [{frame_idx_start}, {frame_idx_end}]")
+
+    if mode == "frame_range":
+        extracted_start = frame_idx_start
+    else:
+        start_value_past = start_value - (seq_len * 0.1)
+        frame_idx_past = actual_indices[np.argmin(np.abs(filter_values[mask] - start_value_past))]
+        extracted_start = frame_idx_past
+
+    extracted_end = min(frame_idx_end + 1, n_rows)
+    return extracted_start, extracted_end
 
 
 def build_continuous_bins(feature: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -434,11 +517,36 @@ def load_and_preprocess_single(
     return df, values, np.zeros(0, dtype=int), int(len(df)), int(len(df))
 
 
-def get_windows(values: np.ndarray, seq_len: int) -> List[np.ndarray]:
+def _iter_windows_from_values(values: np.ndarray, seq_len: int):
+    """
+    SequenceDatasetMasked を使って window を生成するジェネレータ（学習コードと同一仕様、§4.1）。
+    """
     if len(values) < seq_len:
-        return []
-    windows = [values[i : i + seq_len] for i in range(len(values) - seq_len + 1)]
-    return windows
+        return
+    X = values.reshape(-1, 1).astype(np.float32)
+    M = np.zeros_like(X)
+    dataset = SequenceDatasetMasked(X, M, seq_len)
+    for i in range(len(dataset)):
+        x, _ = dataset[i]
+        yield x[:, 0].numpy()
+
+
+def _iter_window_pairs(values: np.ndarray, condition_mask: np.ndarray, seq_len: int):
+    """
+    values と condition_mask を同期して window を生成するジェネレータ（学習コードと同一仕様、§4.1）。
+    """
+    if len(values) < seq_len:
+        return
+    X_v = values.reshape(-1, 1).astype(np.float32)
+    M_v = np.zeros_like(X_v)
+    X_c = condition_mask.astype(np.float32).reshape(-1, 1)
+    M_c = np.zeros_like(X_c)
+    ds_v = SequenceDatasetMasked(X_v, M_v, seq_len)
+    ds_c = SequenceDatasetMasked(X_c, M_c, seq_len)
+    for i in range(len(ds_v)):
+        x_v, _ = ds_v[i]
+        x_c, _ = ds_c[i]
+        yield x_v[:, 0].numpy(), x_c[:, 0].numpy().astype(bool)
 
 
 def analyze_continuous_file(
@@ -446,18 +554,25 @@ def analyze_continuous_file(
     feature: str,
     seq_len: int,
     use_training_preproc: bool,
+    range_mode: Optional[str] = None,
 ) -> Tuple[np.ndarray, np.ndarray, int, int]:
-    _, values, _, n_rows, _ = load_and_preprocess_single(path, feature, use_training_preproc)
-    windows = get_windows(values, seq_len)
-    if not windows:
-        print(f"[INFO] Skipping {os.path.basename(path)} because row count {n_rows} < seq_len {seq_len}")
-        return np.zeros(10, dtype=int), np.zeros(10, dtype=int), 0, 0
+    df, values, _, n_rows, _ = load_and_preprocess_single(path, feature, use_training_preproc)
+    if range_mode is not None:
+        try:
+            extracted_start, extracted_end = extract_range_indices(df, seq_len, range_mode)
+        except ValueError as exc:
+            print(f"[INFO] Skipping {os.path.basename(path)}: {exc}")
+            return np.zeros(10, dtype=int), np.zeros(10, dtype=int), 0, 0
+        values = values[extracted_start:extracted_end]
+        n_rows = len(values)
     bin_min, bin_max, bin_edges = build_continuous_bins(feature)
     max_counts = np.zeros(len(bin_min), dtype=int)
     all_counts = np.zeros(len(bin_min), dtype=int)
     n_valid_max = 0
     n_valid_all = 0
-    for window in windows:
+    n_windows = 0
+    for window in _iter_windows_from_values(values, seq_len):
+        n_windows += 1
         valid = window[np.isfinite(window)]
         if valid.size > 0:
             max_val = valid.max()
@@ -465,11 +580,11 @@ def analyze_continuous_file(
             if 0 <= idx < len(bin_min):
                 max_counts[idx] += 1
             n_valid_max += 1
-        valid_all = window[np.isfinite(window)]
-        if valid_all.size > 0:
-            counts = compute_continuous_counts(valid_all, feature, bin_edges)
+            counts = compute_continuous_counts(valid, feature, bin_edges)
             all_counts += counts
-            n_valid_all += valid_all.size
+            n_valid_all += valid.size
+    if n_windows == 0:
+        print(f"[INFO] Skipping {os.path.basename(path)} because row count {n_rows} < seq_len {seq_len}")
     return max_counts, all_counts, n_valid_max, n_valid_all
 
 
@@ -480,26 +595,81 @@ def analyze_filtered_continuous_file(
     use_training_preproc: bool,
     filter_column: str,
     filter_value: str,
+    time_mode: str = "first_window",
 ) -> Tuple[np.ndarray, np.ndarray, int, int]:
+    """
+    Filtered continuous feature analysis with time range limitation (frame_range_config).
+    
+    Args:
+        time_mode: "first_window" = start_valueより seq_len分前から end_value までの範囲
+                   "frame_range" = [start_value, end_value] 厳密な範囲内
+    """
     df, values, _, n_rows, _ = load_and_preprocess_single(path, feature, use_training_preproc)
     filter_column_norm = filter_column.strip().lower()
     if filter_column_norm not in df.columns:
         raise ValueError(f"{os.path.basename(path)}: filter column '{filter_column}' not found")
 
-    condition_mask = build_exact_match_mask(df[filter_column_norm], filter_value)
-    windows = get_windows(values, seq_len)
-    if not windows:
-        print(f"[INFO] Skipping {os.path.basename(path)} because row count {n_rows} < seq_len {seq_len}")
+    # Time range limitation (新規追加)
+    filter_col = FRAME_RANGE_CONFIG.get('filter_column', 'time')
+    start_value = float(FRAME_RANGE_CONFIG.get('start_value', 0))
+    end_value = float(FRAME_RANGE_CONFIG.get('end_value', 0))
+    
+    filter_col_norm = filter_col.strip().lower()
+    if filter_col_norm not in df.columns:
+        raise ValueError(f"{os.path.basename(path)}: frame_range filter_column '{filter_col}' not found")
+    
+    filter_values = pd.to_numeric(df[filter_col_norm], errors="coerce").to_numpy(dtype=float)
+    
+    # 有効な値のマスク
+    mask = np.isfinite(filter_values)
+    if not np.any(mask):
+        print(f"[INFO] Skipping {os.path.basename(path)}: no valid values in filter column '{filter_col}'")
         return np.zeros(10, dtype=int), np.zeros(10, dtype=int), 0, 0
-
-    condition_windows = get_windows(condition_mask.astype(bool), seq_len)
+    
+    # start_value に最も近い行のインデックス
+    idx_start = np.argmin(np.abs(filter_values[mask] - start_value))
+    actual_indices = np.where(mask)[0]
+    frame_idx_start = actual_indices[idx_start]
+    
+    # end_value に最も近い行のインデックス
+    idx_end = np.argmin(np.abs(filter_values[mask] - end_value))
+    frame_idx_end = actual_indices[idx_end]
+    
+    # frame_idx_end が frame_idx_start より後ろにあることを確認
+    if frame_idx_end <= frame_idx_start:
+        print(f"[INFO] Skipping {os.path.basename(path)}: invalid frame range [{frame_idx_start}, {frame_idx_end}]")
+        return np.zeros(10, dtype=int), np.zeros(10, dtype=int), 0, 0
+    
+    # 時間範囲の決定（mode1/mode2で異なる）
+    if time_mode == "frame_range":
+        # モード2: [start_value, end_value] 範囲内に収める
+        extracted_start = frame_idx_start
+        extracted_end = min(frame_idx_end + 1, n_rows)
+    else:
+        # モード1（デフォルト）: start_value より seq_len分前から開始
+        start_value_past = start_value - (seq_len * 0.1)
+        idx_past = np.argmin(np.abs(filter_values[mask] - start_value_past))
+        frame_idx_past = actual_indices[idx_past]
+        extracted_start = frame_idx_past
+        extracted_end = min(frame_idx_end + 1, n_rows)
+    
+    # 時間範囲内でのwindow生成
+    range_values = values[extracted_start:extracted_end]
+    range_condition_mask = build_exact_match_mask(df[filter_column_norm], filter_value)[extracted_start:extracted_end]
+    
+    if len(range_values) < seq_len:
+        print(f"[INFO] Skipping {os.path.basename(path)}: range length {len(range_values)} < seq_len {seq_len}")
+        return np.zeros(10, dtype=int), np.zeros(10, dtype=int), 0, 0
+    
     bin_min, bin_max, bin_edges = build_continuous_bins(feature)
     max_counts = np.zeros(len(bin_min), dtype=int)
     all_counts = np.zeros(len(bin_min), dtype=int)
     n_valid_max = 0
     n_valid_all = 0
+    n_windows = 0
 
-    for window, condition_window in zip(windows, condition_windows):
+    for window, condition_window in _iter_window_pairs(range_values, range_condition_mask, seq_len):
+        n_windows += 1
         matched = window[np.isfinite(window) & condition_window]
         if matched.size > 0:
             max_val = matched.max()
@@ -511,6 +681,8 @@ def analyze_filtered_continuous_file(
             n_valid_max += 1
             n_valid_all += matched.size
 
+    if n_windows == 0:
+        print(f"[INFO] Skipping {os.path.basename(path)} because row count {len(range_values)} < seq_len {seq_len}")
     return max_counts, all_counts, n_valid_max, n_valid_all
 
 
@@ -630,14 +802,24 @@ def build_perfile_dataframe_filtered_continuous(
     return pd.DataFrame(rows)
 
 
-def collect_filtered_time_values(
+def collect_time_values(
     path: str,
     seq_len: int,
     use_training_preproc: bool,
-    filter_column: str,
-    filter_value: str,
     time_column: str,
+    time_mode: str = "first_window",
+    filter_column: Optional[str] = None,
+    filter_value: Optional[str] = None,
 ) -> np.ndarray:
+    """
+    Time分布を集計する（filter条件は optional）。
+    
+    Args:
+        time_mode: "first_window" = start_valueより seq_len分前から end_value までの範囲
+                   "frame_range" = [start_value, end_value] 厳密な範囲内
+        filter_column: optional - 指定時はこの列で filter_value と一致するフレームのみ集計
+        filter_value: optional - filter_column での一致値
+    """
     df = read_csv_lower(path)
     require_columns(df, path)
 
@@ -648,23 +830,77 @@ def collect_filtered_time_values(
     if time_column_norm not in df.columns:
         raise ValueError(f"{os.path.basename(path)}: time column '{time_column}' not found")
 
-    filter_column_norm = filter_column.strip().lower()
-    if filter_column_norm not in df.columns:
-        raise ValueError(f"{os.path.basename(path)}: filter column '{filter_column}' not found")
-
     n_rows = int(len(df))
-    condition_mask = build_exact_match_mask(df[filter_column_norm], filter_value)
     time_series = pd.to_numeric(df[time_column_norm], errors="coerce").to_numpy(dtype=float)
-    time_windows = get_windows(time_series, seq_len)
-    condition_windows = get_windows(condition_mask.astype(bool), seq_len)
-    if not time_windows:
-        print(f"[INFO] Skipping {os.path.basename(path)} because row count {n_rows} < seq_len {seq_len}")
-        return np.array([], dtype=np.float64)
-
     matched_times: List[float] = []
-    for time_window, condition_window in zip(time_windows, condition_windows):
+
+    # filter_column が指定されている場合の条件マスク
+    if filter_column is not None and filter_value is not None:
+        filter_column_norm = filter_column.strip().lower()
+        if filter_column_norm not in df.columns:
+            raise ValueError(f"{os.path.basename(path)}: filter column '{filter_column}' not found")
+        condition_mask = build_exact_match_mask(df[filter_column_norm], filter_value)
+    else:
+        condition_mask = np.ones(n_rows, dtype=bool)
+
+    # frame_range_config から start_value, end_value を取得
+    filter_col = FRAME_RANGE_CONFIG.get('filter_column', 'time')
+    start_value = float(FRAME_RANGE_CONFIG.get('start_value', 0))
+    end_value = float(FRAME_RANGE_CONFIG.get('end_value', 0))
+    
+    # filter_col のデータを取得（通常は時刻カラム）
+    filter_col_norm = filter_col.strip().lower()
+    if filter_col_norm not in df.columns:
+        raise ValueError(f"{os.path.basename(path)}: frame_range filter_column '{filter_col}' not found")
+    
+    filter_values = pd.to_numeric(df[filter_col_norm], errors="coerce").to_numpy(dtype=float)
+    
+    # 有効な値のマスク
+    mask = np.isfinite(filter_values)
+    if not np.any(mask):
+        print(f"[INFO] Skipping {os.path.basename(path)}: no valid values in filter column '{filter_col}'")
+        return np.asarray(matched_times, dtype=np.float64)
+    
+    # start_value に最も近い行のインデックス
+    idx_start = np.argmin(np.abs(filter_values[mask] - start_value))
+    actual_indices = np.where(mask)[0]
+    frame_idx_start = actual_indices[idx_start]
+    
+    # end_value に最も近い行のインデックス
+    idx_end = np.argmin(np.abs(filter_values[mask] - end_value))
+    frame_idx_end = actual_indices[idx_end]
+    
+    # frame_idx_end が frame_idx_start より後ろにあることを確認
+    if frame_idx_end <= frame_idx_start:
+        print(f"[INFO] Skipping {os.path.basename(path)}: invalid frame range [{frame_idx_start}, {frame_idx_end}]")
+        return np.asarray(matched_times, dtype=np.float64)
+    
+    # 範囲を決定
+    if time_mode == "frame_range":
+        # モード2: [start_value, end_value] 範囲内に収める
+        extracted_start = frame_idx_start
+        extracted_end = min(frame_idx_end + 1, n_rows)
+    else:
+        # モード1（デフォルト）: start_value より seq_len分前から開始
+        start_value_past = start_value - (seq_len * 0.1)
+        idx_past = np.argmin(np.abs(filter_values[mask] - start_value_past))
+        frame_idx_past = actual_indices[idx_past]
+        extracted_start = frame_idx_past
+        extracted_end = min(frame_idx_end + 1, n_rows)
+    
+    # windowを生成
+    window_time_series = time_series[extracted_start:extracted_end]
+    window_condition_mask = condition_mask[extracted_start:extracted_end]
+    
+    if len(window_time_series) < seq_len:
+        print(f"[INFO] Skipping {os.path.basename(path)}: range length {len(window_time_series)} < seq_len {seq_len}")
+        return np.asarray(matched_times, dtype=np.float64)
+    
+    # windowを生成し、条件マスクでフィルタ
+    for time_window, condition_window in _iter_window_pairs(window_time_series, window_condition_mask, seq_len):
         matched = time_window[condition_window & np.isfinite(time_window)]
         matched_times.extend(matched.tolist())
+    
     return np.asarray(matched_times, dtype=np.float64)
 
 
@@ -694,10 +930,8 @@ def build_summary_dataframe_false_accel_continuous(
     feature: str,
     filter_column: str,
     filter_value: str,
-    max_counts_total: np.ndarray,
-    all_counts_total: np.ndarray,
-    total_valid_max: int,
-    total_valid_all: int,
+    fp_counts_total: np.ndarray,
+    total_valid_fp: int,
 ) -> pd.DataFrame:
     bin_min, bin_max, _ = build_continuous_bins(feature)
     return pd.DataFrame(
@@ -707,10 +941,8 @@ def build_summary_dataframe_false_accel_continuous(
             "condition_value": [filter_value] * len(bin_min),
             "bin_min": bin_min,
             "bin_max": bin_max,
-            "fp_max_count_total": max_counts_total,
-            "fp_max_ratio_total": np.divide(max_counts_total, total_valid_max, out=np.zeros_like(max_counts_total, dtype=float), where=total_valid_max > 0),
-            "fp_count_total": all_counts_total,
-            "fp_ratio_total": np.divide(all_counts_total, total_valid_all, out=np.zeros_like(all_counts_total, dtype=float), where=total_valid_all > 0),
+            "fp_count_total": fp_counts_total,
+            "fp_ratio_total": np.divide(fp_counts_total, total_valid_fp, out=np.zeros_like(fp_counts_total, dtype=float), where=total_valid_fp > 0),
         }
     )
 
@@ -725,8 +957,7 @@ def build_perfile_dataframe_false_accel_continuous(
     rows = []
     for stat in file_stats:
         for idx in range(len(bin_min)):
-            total_max = int(stat["max_counts"][idx])
-            total_all = int(stat["all_counts"][idx])
+            count = int(stat["fp_counts"][idx])
             rows.append(
                 {
                     "file_name": stat["file_name"],
@@ -735,10 +966,8 @@ def build_perfile_dataframe_false_accel_continuous(
                     "condition_value": filter_value,
                     "bin_min": bin_min[idx],
                     "bin_max": bin_max[idx],
-                    "fp_max_count": total_max,
-                    "fp_max_ratio": total_max / stat["n_valid_max"] if stat["n_valid_max"] > 0 else 0.0,
-                    "fp_count": total_all,
-                    "fp_ratio": total_all / stat["n_valid_all"] if stat["n_valid_all"] > 0 else 0.0,
+                    "fp_count": count,
+                    "fp_ratio": count / stat["n_valid_fp"] if stat["n_valid_fp"] > 0 else 0.0,
                 }
             )
     return pd.DataFrame(rows)
@@ -815,76 +1044,149 @@ def analyze_false_accel_continuous_file(
     use_training_preproc: bool,
     filter_column: str,
     filter_value: str,
-) -> Tuple[np.ndarray, np.ndarray, int, int]:
+    time_mode: str = "first_window",
+) -> Tuple[np.ndarray, int]:
+    """
+    誤検知分布: window 構造は用いず、フレーム行単位で集計する（仕様§5.1.5）。
+    時間範囲制限（frame_range_config）を適用。
+    
+    Args:
+        time_mode: "first_window" = start_valueより seq_len分前から end_value までの範囲
+                   "frame_range" = [start_value, end_value] 厳密な範囲内
+    """
     df, values, _, n_rows, _ = load_and_preprocess_single(path, feature, use_training_preproc)
     filter_column_norm = filter_column.strip().lower()
     if filter_column_norm not in df.columns:
         raise ValueError(f"{os.path.basename(path)}: filter column '{filter_column}' not found")
 
-    condition_mask = build_exact_match_mask(df[filter_column_norm], filter_value)
-    windows = get_windows(values, seq_len)
-    if not windows:
-        print(f"[INFO] Skipping {os.path.basename(path)} because row count {n_rows} < seq_len {seq_len}")
-        return np.zeros(10, dtype=int), np.zeros(10, dtype=int), 0, 0
+    # Time range limitation
+    filter_col = FRAME_RANGE_CONFIG.get('filter_column', 'time')
+    start_value = float(FRAME_RANGE_CONFIG.get('start_value', 0))
+    end_value = float(FRAME_RANGE_CONFIG.get('end_value', 0))
+    
+    filter_col_norm = filter_col.strip().lower()
+    if filter_col_norm not in df.columns:
+        raise ValueError(f"{os.path.basename(path)}: frame_range filter_column '{filter_col}' not found")
+    
+    filter_values = pd.to_numeric(df[filter_col_norm], errors="coerce").to_numpy(dtype=float)
+    
+    # 有効な値のマスク
+    mask = np.isfinite(filter_values)
+    if not np.any(mask):
+        print(f"[INFO] Skipping {os.path.basename(path)}: no valid values in filter column '{filter_col}'")
+        return np.zeros(10, dtype=int), 0
+    
+    # start_value に最も近い行のインデックス
+    idx_start = np.argmin(np.abs(filter_values[mask] - start_value))
+    actual_indices = np.where(mask)[0]
+    frame_idx_start = actual_indices[idx_start]
+    
+    # end_value に最も近い行のインデックス
+    idx_end = np.argmin(np.abs(filter_values[mask] - end_value))
+    frame_idx_end = actual_indices[idx_end]
+    
+    # frame_idx_end が frame_idx_start より後ろにあることを確認
+    if frame_idx_end <= frame_idx_start:
+        print(f"[INFO] Skipping {os.path.basename(path)}: invalid frame range [{frame_idx_start}, {frame_idx_end}]")
+        return np.zeros(10, dtype=int), 0
+    
+    # 時間範囲の決定（mode1/mode2で異なる）
+    if time_mode == "frame_range":
+        # モード2: [start_value, end_value] 範囲内に収める
+        extracted_start = frame_idx_start
+        extracted_end = min(frame_idx_end + 1, n_rows)
+    else:
+        # モード1（デフォルト）: start_value より seq_len分前から開始
+        start_value_past = start_value - (seq_len * 0.1)
+        idx_past = np.argmin(np.abs(filter_values[mask] - start_value_past))
+        frame_idx_past = actual_indices[idx_past]
+        extracted_start = frame_idx_past
+        extracted_end = min(frame_idx_end + 1, n_rows)
+    
+    # 時間範囲内でのフレーム抽出
+    range_df = df.iloc[extracted_start:extracted_end]
+    range_values = values[extracted_start:extracted_end]
+    
+    condition_mask = build_exact_match_mask(range_df[filter_column_norm], filter_value)
+    fp_values = range_values[condition_mask]
 
-    condition_windows = get_windows(condition_mask.astype(bool), seq_len)
     bin_min, bin_max, bin_edges = build_continuous_bins(feature)
-    max_counts = np.zeros(len(bin_min), dtype=int)
-    all_counts = np.zeros(len(bin_min), dtype=int)
-    n_valid_max = 0
-    n_valid_all = 0
+    fp_counts = compute_continuous_counts(fp_values, feature, bin_edges)
+    n_valid_fp = int(fp_counts.sum())
 
-    for window, condition_window in zip(windows, condition_windows):
-        matched = window[np.isfinite(window) & condition_window]
-        if matched.size > 0:
-            max_val = matched.max()
-            idx = np.digitize([max_val], bin_edges[1:], right=True)[0]
-            if 0 <= idx < len(bin_min):
-                max_counts[idx] += 1
-            counts = compute_continuous_counts(matched, feature, bin_edges)
-            all_counts += counts
-            n_valid_max += 1
-            n_valid_all += matched.size
-
-    return max_counts, all_counts, n_valid_max, n_valid_all
+    return fp_counts, n_valid_fp
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze accel distribution from CSVs")
     parser.add_argument("--csv", "-i", required=True, help="Single CSV file or directory containing CSVs")
     parser.add_argument("--csvdir", "-d", default="", help="Directory containing CSVs; takes precedence over --csv")
-    parser.add_argument("--pattern", default="*.csv", help="Glob pattern for CSV discovery")
-    parser.add_argument("--hparams", default="config/hyperparams_common.json", help="Hyperparameters JSON path")
-    parser.add_argument("--feature", default="accelpedalangle", help="Feature name to analyze")
-    parser.add_argument("--output-dir", default="AE/outputs", help="Output directory for Excel")
-    parser.add_argument("--output-prefix", default="accel_dist", help="Output filename prefix")
+    parser.add_argument("--pattern", default=None, help="Glob pattern for CSV discovery")
+    parser.add_argument("--hparams", default=None, help="Hyperparameters JSON path")
+    parser.add_argument("--feature", default=None, help="Feature name to analyze")
+    parser.add_argument("--output-dir", default=None, help="Output directory for Excel")
+    parser.add_argument("--output-prefix", default=None, help="Output filename prefix override")
     parser.add_argument("--use-training-preproc", action="store_true", help="Use existing training preprocessing")
-    parser.add_argument("--filtered-mode", action="store_true", help="Add filtered aggregation sheets based on an exact-match condition")
-    parser.add_argument("--filter-column", default="is_anomaly", help="Condition column for filtered aggregation")
-    parser.add_argument("--filter-value", default="1", help="Exact-match condition value for filtered aggregation")
-    parser.add_argument("--time-column", default="time", help="Time column used for filtered Time distribution")
+    parser.add_argument("--filtered-mode", action="store_true", help="Switch to inference analysis mode")
+    parser.add_argument("--filter-column", default=None, help="Condition column for inference analysis")
+    parser.add_argument("--filter-value", default=None, help="Exact-match condition value for inference analysis")
+    parser.add_argument("--time-column", default=None, help="Time column used for inference Time distribution")
+    parser.add_argument("--time-mode", default=None, choices=["first_window", "frame_range"], help="Inference time extraction mode")
+    parser.add_argument("--train-window-mode", default=None, choices=["mode1", "mode2"], help="Train window mode")
+    parser.add_argument("--analyze-config", default=_ANALYZE_CONFIG_PATH, help="Analyze config JSON path")
+    parser.add_argument("--train-filter-config", default=None, help="Train filter config JSON path")
     parser.add_argument("--artifacts-dir", default="", help="Directory containing trained model artifacts for contribution analysis")
     args = parser.parse_args()
 
-    if args.feature not in FEATURES:
-        raise ValueError(f"Feature '{args.feature}' is not in FEATURES")
-    if args.filtered_mode and args.feature in CATEGORICAL_FEATURES:
-        raise ValueError("Filtered mode currently supports continuous features only")
+    analyze_config = load_analyze_config(args.analyze_config)
 
-    hparams = load_hparams(args.hparams)
-    seq_len = int(hparams.get("seq_len"))
-    csv_paths = get_csv_paths(args.csv, args.csvdir, args.pattern)
+    pattern = resolve_setting(args.pattern, analyze_config, "pattern", "*.csv")
+    hparams_path = resolve_setting(args.hparams, analyze_config, "hparams_path", "config/hyperparams_common.json")
+    feature = resolve_setting(args.feature, analyze_config, "feature", "accelpedalangle")
+    output_dir = resolve_setting(args.output_dir, analyze_config, "output_dir", "AE/outputs")
+    time_mode = resolve_setting(args.time_mode, analyze_config, "time_mode", "first_window")
+    time_column = resolve_setting(args.time_column, analyze_config, "time_column", "time")
+    train_window_mode = resolve_setting(args.train_window_mode, analyze_config, "train_window_mode", "mode1")
+    use_training_preproc = bool(args.use_training_preproc or analyze_config.get("use_training_preproc", False))
+    train_filter_config = resolve_setting(
+        args.train_filter_config,
+        analyze_config,
+        "train_filter_config_path",
+        os.path.join(PROJECT_ROOT, "config", "tagged_dataset_train.json"),
+    )
+    filter_column = resolve_setting(args.filter_column, analyze_config, "inference_filter_column", None)
+    filter_value = resolve_setting(args.filter_value, analyze_config, "inference_filter_value", None)
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    output_path = os.path.join(args.output_dir, f"{args.output_prefix}_{args.feature}.xlsx")
+    if feature not in FEATURES:
+        raise ValueError(f"Feature '{feature}' is not in FEATURES")
+    if args.filtered_mode and feature in CATEGORICAL_FEATURES:
+        raise ValueError("Inference mode currently supports continuous features only")
+    if args.filtered_mode and (not filter_column or filter_value is None):
+        raise ValueError("Inference mode requires filter-column and filter-value via CLI or analyze_config.json")
 
-    is_categorical = args.feature in CATEGORICAL_FEATURES
-    filtered_summary_df = None
-    filtered_perfile_df = None
-    filtered_time_summary_df = None
-    filtered_time_perfile_df = None
-    false_accel_summary_df = None
-    false_accel_perfile_df = None
+    # seq_len は定義ファイルから取得し、フォールバックとして hparams を参照する（§1.2）
+    try:
+        _model_cfg = extract_model_config_from_definition(_definition)
+        seq_len = int(_model_cfg.get("seq_len", 128))
+    except Exception:
+        hparams = load_hparams(hparams_path)
+        seq_len = int(hparams.get("seq_len", 128))
+
+    if args.filtered_mode:
+        csv_paths = get_csv_paths(args.csv, args.csvdir, pattern)
+        output_prefix = resolve_setting(args.output_prefix, analyze_config, "output_prefix_inference", "accel_dist_inference")
+    else:
+        csv_paths = get_train_csv_paths(args.csv, args.csvdir, pattern, train_filter_config)
+        output_prefix = resolve_setting(args.output_prefix, analyze_config, "output_prefix_train", "accel_dist_train")
+
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{output_prefix}_{feature}.xlsx")
+
+    is_categorical = feature in CATEGORICAL_FEATURES
+    inference_summary_df = None
+    inference_perfile_df = None
+    inference_time_summary_df = None
+    inference_time_perfile_df = None
     contribution_df = None
     model = None
     scaler = None
@@ -893,63 +1195,40 @@ def main() -> None:
     if args.artifacts_dir:
         model, scaler, layout, device = load_model_artifacts(args.artifacts_dir)
     if is_categorical:
-        totals: np.ndarray = np.zeros(len(CATEGORY_MAPS[args.feature]), dtype=int)
-        class_names = list(CATEGORY_MAPS[args.feature].keys())
+        totals: np.ndarray = np.zeros(len(CATEGORY_MAPS[feature]), dtype=int)
+        class_names = list(CATEGORY_MAPS[feature].keys())
         file_stats: List[Dict[str, Any]] = []
         for path in csv_paths:
-            counts, names, total = analyze_categorical_file(path, args.feature, args.use_training_preproc)
+            counts, names, total = analyze_categorical_file(path, feature, use_training_preproc)
             file_stats.append({"file_name": os.path.basename(path), "counts": counts, "total": total})
             totals += counts
-        summary_df = build_summary_dataframe_categorical(args.feature, class_names, totals)
-        perfile_df = build_perfile_dataframe_categorical(args.feature, file_stats, class_names)
+        summary_df = build_summary_dataframe_categorical(feature, class_names, totals)
+        perfile_df = build_perfile_dataframe_categorical(feature, file_stats, class_names)
     else:
         totals_max = np.zeros(10, dtype=int)
         totals_all = np.zeros(10, dtype=int)
         total_valid_max = 0
         total_valid_all = 0
         file_stats: List[Dict[str, Any]] = []
-        for path in csv_paths:
-            max_counts, all_counts, n_valid_max, n_valid_all = analyze_continuous_file(
-                path, args.feature, seq_len, args.use_training_preproc
-            )
-            file_stats.append(
-                {
-                    "file_name": os.path.basename(path),
-                    "max_counts": max_counts,
-                    "all_counts": all_counts,
-                    "n_valid_max": n_valid_max,
-                    "n_valid_all": n_valid_all,
-                }
-            )
-            totals_max += max_counts
-            totals_all += all_counts
-            total_valid_max += n_valid_max
-            total_valid_all += n_valid_all
-        summary_df = build_summary_dataframe_continuous(
-            args.feature,
-            totals_max,
-            totals_all,
-            total_valid_max,
-            total_valid_all,
-        )
-        perfile_df = build_perfile_dataframe_continuous(args.feature, file_stats)
-
         if args.filtered_mode:
-            filtered_totals_max = np.zeros(10, dtype=int)
-            filtered_totals_all = np.zeros(10, dtype=int)
-            filtered_total_valid_max = 0
-            filtered_total_valid_all = 0
-            filtered_file_stats: List[Dict[str, Any]] = []
+            inference_totals_max = np.zeros(10, dtype=int)
+            inference_totals_all = np.zeros(10, dtype=int)
+            inference_total_valid_max = 0
+            inference_total_valid_all = 0
+            inference_file_stats: List[Dict[str, Any]] = []
+            time_values_total: List[float] = []
+            time_file_stats: List[Dict[str, Any]] = []
             for path in csv_paths:
                 max_counts, all_counts, n_valid_max, n_valid_all = analyze_filtered_continuous_file(
                     path,
-                    args.feature,
+                    feature,
                     seq_len,
-                    args.use_training_preproc,
-                    args.filter_column,
-                    args.filter_value,
+                    use_training_preproc,
+                    filter_column,
+                    str(filter_value),
+                    time_mode=time_mode,
                 )
-                filtered_file_stats.append(
+                inference_file_stats.append(
                     {
                         "file_name": os.path.basename(path),
                         "max_counts": max_counts,
@@ -958,39 +1237,21 @@ def main() -> None:
                         "n_valid_all": n_valid_all,
                     }
                 )
-                filtered_totals_max += max_counts
-                filtered_totals_all += all_counts
-                filtered_total_valid_max += n_valid_max
-                filtered_total_valid_all += n_valid_all
+                inference_totals_max += max_counts
+                inference_totals_all += all_counts
+                inference_total_valid_max += n_valid_max
+                inference_total_valid_all += n_valid_all
 
-            filtered_summary_df = build_summary_dataframe_filtered_continuous(
-                args.feature,
-                args.filter_column,
-                args.filter_value,
-                filtered_totals_max,
-                filtered_totals_all,
-                filtered_total_valid_max,
-                filtered_total_valid_all,
-            )
-            filtered_perfile_df = build_perfile_dataframe_filtered_continuous(
-                args.feature,
-                args.filter_column,
-                args.filter_value,
-                filtered_file_stats,
-            )
-
-            filtered_time_values_total: List[float] = []
-            filtered_time_file_stats: List[Dict[str, Any]] = []
-            for path in csv_paths:
-                time_values = collect_filtered_time_values(
+                time_values = collect_time_values(
                     path,
                     seq_len,
-                    args.use_training_preproc,
-                    args.filter_column,
-                    args.filter_value,
-                    args.time_column,
+                    use_training_preproc,
+                    time_column,
+                    time_mode=time_mode,
+                    filter_column=filter_column,
+                    filter_value=str(filter_value),
                 )
-                filtered_time_file_stats.append(
+                time_file_stats.append(
                     {
                         "file_name": os.path.basename(path),
                         "time_values": time_values,
@@ -998,51 +1259,64 @@ def main() -> None:
                         "n_valid_time": int(time_values.size),
                     }
                 )
-                filtered_time_values_total.extend(time_values.tolist())
+                time_values_total.extend(time_values.tolist())
 
-            time_bin_min, time_bin_max, time_edges = build_time_bins(np.asarray(filtered_time_values_total, dtype=np.float64))
-            filtered_time_counts_total = np.zeros(len(time_bin_min), dtype=int)
-            filtered_time_total_valid = 0
-            for stat in filtered_time_file_stats:
+            summary_df = build_summary_dataframe_filtered_continuous(
+                feature,
+                filter_column,
+                str(filter_value),
+                inference_totals_max,
+                inference_totals_all,
+                inference_total_valid_max,
+                inference_total_valid_all,
+            )
+            perfile_df = build_perfile_dataframe_filtered_continuous(
+                feature,
+                filter_column,
+                str(filter_value),
+                inference_file_stats,
+            )
+
+            time_bin_min, time_bin_max, time_edges = build_time_bins(np.asarray(time_values_total, dtype=np.float64))
+            time_counts_total = np.zeros(len(time_bin_min), dtype=int)
+            time_total_valid = 0
+            for stat in time_file_stats:
                 time_values = stat["time_values"]
                 counts = compute_time_counts(time_values, time_edges)
                 stat["time_counts"] = counts
-                filtered_time_counts_total += counts
-                filtered_time_total_valid += int(time_values.size)
+                time_counts_total += counts
+                time_total_valid += int(time_values.size)
 
-            filtered_time_summary_df = build_summary_dataframe_filtered_time(
-                args.feature,
-                args.filter_column,
-                args.filter_value,
+            inference_summary_df = summary_df
+            inference_perfile_df = perfile_df
+            inference_time_summary_df = build_summary_dataframe_filtered_time(
+                feature,
+                filter_column,
+                str(filter_value),
                 time_bin_min,
                 time_bin_max,
-                filtered_time_counts_total,
-                filtered_time_total_valid,
+                time_counts_total,
+                time_total_valid,
             )
-            filtered_time_perfile_df = build_perfile_dataframe_filtered_time(
-                args.feature,
-                args.filter_column,
-                args.filter_value,
-                filtered_time_file_stats,
+            inference_time_perfile_df = build_perfile_dataframe_filtered_time(
+                feature,
+                filter_column,
+                str(filter_value),
+                time_file_stats,
                 time_bin_min,
                 time_bin_max,
             )
-
-            false_accel_totals_max = np.zeros(10, dtype=int)
-            false_accel_totals_all = np.zeros(10, dtype=int)
-            false_accel_total_valid_max = 0
-            false_accel_total_valid_all = 0
-            false_accel_file_stats: List[Dict[str, Any]] = []
+        else:
+            range_mode = "first_window" if train_window_mode == "mode1" else "frame_range"
             for path in csv_paths:
-                max_counts, all_counts, n_valid_max, n_valid_all = analyze_false_accel_continuous_file(
+                max_counts, all_counts, n_valid_max, n_valid_all = analyze_continuous_file(
                     path,
-                    args.feature,
+                    feature,
                     seq_len,
-                    args.use_training_preproc,
-                    args.filter_column,
-                    args.filter_value,
+                    use_training_preproc,
+                    range_mode=range_mode,
                 )
-                false_accel_file_stats.append(
+                file_stats.append(
                     {
                         "file_name": os.path.basename(path),
                         "max_counts": max_counts,
@@ -1051,26 +1325,18 @@ def main() -> None:
                         "n_valid_all": n_valid_all,
                     }
                 )
-                false_accel_totals_max += max_counts
-                false_accel_totals_all += all_counts
-                false_accel_total_valid_max += n_valid_max
-                false_accel_total_valid_all += n_valid_all
-
-            false_accel_summary_df = build_summary_dataframe_false_accel_continuous(
-                args.feature,
-                args.filter_column,
-                args.filter_value,
-                false_accel_totals_max,
-                false_accel_totals_all,
-                false_accel_total_valid_max,
-                false_accel_total_valid_all,
+                totals_max += max_counts
+                totals_all += all_counts
+                total_valid_max += n_valid_max
+                total_valid_all += n_valid_all
+            summary_df = build_summary_dataframe_continuous(
+                feature,
+                totals_max,
+                totals_all,
+                total_valid_max,
+                total_valid_all,
             )
-            false_accel_perfile_df = build_perfile_dataframe_false_accel_continuous(
-                args.feature,
-                args.filter_column,
-                args.filter_value,
-                false_accel_file_stats,
-            )
+            perfile_df = build_perfile_dataframe_continuous(feature, file_stats)
 
     if args.artifacts_dir:
         contribution_frames: List[pd.DataFrame] = []
@@ -1099,17 +1365,15 @@ def main() -> None:
         )
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="Summary", index=False)
-        perfile_df.to_excel(writer, sheet_name="PerFile", index=False)
-        if filtered_summary_df is not None and filtered_perfile_df is not None:
-            filtered_summary_df.to_excel(writer, sheet_name="SummaryFiltered", index=False)
-            filtered_perfile_df.to_excel(writer, sheet_name="PerFileFiltered", index=False)
-        if filtered_time_summary_df is not None and filtered_time_perfile_df is not None:
-            filtered_time_summary_df.to_excel(writer, sheet_name="SummaryFilteredTime", index=False)
-            filtered_time_perfile_df.to_excel(writer, sheet_name="PerFileFilteredTime", index=False)
-        if false_accel_summary_df is not None and false_accel_perfile_df is not None:
-            false_accel_summary_df.to_excel(writer, sheet_name="SummaryFalseAccel", index=False)
-            false_accel_perfile_df.to_excel(writer, sheet_name="PerFileFalseAccel", index=False)
+        if args.filtered_mode:
+            summary_df.to_excel(writer, sheet_name="SummaryInference", index=False)
+            perfile_df.to_excel(writer, sheet_name="PerFileInference", index=False)
+            if inference_time_summary_df is not None and inference_time_perfile_df is not None:
+                inference_time_summary_df.to_excel(writer, sheet_name="SummaryInferenceTime", index=False)
+                inference_time_perfile_df.to_excel(writer, sheet_name="PerFileInferenceTime", index=False)
+        else:
+            summary_df.to_excel(writer, sheet_name="SummaryTrain", index=False)
+            perfile_df.to_excel(writer, sheet_name="PerFileTrain", index=False)
         if contribution_df is not None:
             contribution_df.to_excel(writer, sheet_name="Contribution", index=False)
 

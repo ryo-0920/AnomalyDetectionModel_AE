@@ -107,7 +107,7 @@ FEATURE_RULES.update({
     #"vsccontrol": {"interp": None, "clip": False},
 })
 
-TAGGED_FILTER_TRAIN_CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "tagged_dataset_filter_train.json")
+TAGGED_DATASET_TRAIN_CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "tagged_dataset_train.json")
 NETWORK_DATASET_DIRS_NORM = [os.path.normcase(os.path.normpath(p)) for p in NETWORK_DATASET_DIRS]
 
 
@@ -117,12 +117,20 @@ def _is_network_path_or_child(path: str) -> bool:
         if p_norm == root or p_norm.startswith(root + os.sep):
             return True
     return False
+
+
+def resolve_tagged_train_config_path() -> str:
+    return TAGGED_DATASET_TRAIN_CONFIG_PATH
+
+
 def build_tagged_training_csvs(seed: int) -> List[str]:
     csv_paths, report = build_tagged_dataset_csvs_from_config(
-        config_path=TAGGED_FILTER_TRAIN_CONFIG_PATH,
+        config_path=resolve_tagged_train_config_path(),
         pattern="*.csv",
     )
     print(f"[INFO] tagged filter config: {report['config_path']}")
+    if report.get("config_profile"):
+        print(f"[INFO] tagged filter profile: {report['config_profile']}")
     print(f"[INFO] ledger file-name column: {report['file_name_column']}")
     print(
         f"[INFO] ledger rows: total={report['rows_total']}, "

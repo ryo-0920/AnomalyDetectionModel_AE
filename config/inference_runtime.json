@@ -1,0 +1,7 @@
+{
+  "meta_csv": "",
+  "valid_results_dir": "output/Valid_results",
+  "legacy_output_dir": "result/OFF_pa99",
+  "file_score_mode": "both",
+  "file_eval_mode": "tail"
+}

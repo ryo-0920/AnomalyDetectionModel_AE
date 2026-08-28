@@ -25,7 +25,7 @@ from models.transformer_autoencoder import CausalTransformerAutoencoder
 DEFAULT_INPUT_DIR = (PROJECT_ROOT / "datarecode_test").resolve()
 DEFAULT_HPARAMS_PATH = (PROJECT_ROOT / "config" / "hyperparams_common.json").resolve()
 DEFAULT_META_CSV_PATH = (PROJECT_ROOT / "config" / "inference_ground_truth.csv").resolve()
-DEFAULT_TAGGED_FILTER_INFER_PATH = (PROJECT_ROOT / "config" / "tagged_dataset_filter_infer.json").resolve()
+DEFAULT_TAGGED_DATASET_INFERENCE_CONFIG_PATH = (PROJECT_ROOT / "config" / "tagged_dataset_inference.json").resolve()
 LEGACY_DEFAULT_ARTIFACTS_DIR = (PROJECT_ROOT / "artifacts" / "transformer_ae").resolve()
 DEFAULT_VALID_RESULTS_DIR = (PROJECT_ROOT / "output" / "Valid_results").resolve()
 MODEL_NAME = "transformer_ae"
@@ -43,6 +43,10 @@ REQUIRED_SCORE_POLICY = {
     "threshold_source": "full_training_dataset",
     "legacy_compatibility": False,
 }
+
+
+def resolve_tagged_infer_config_path() -> Path:
+    return DEFAULT_TAGGED_DATASET_INFERENCE_CONFIG_PATH
 from app.ui.interactive import TAGGED_DATASET_TOKEN
 from app.ui.interactive import ensure_tty, prompt_artifacts_dir, prompt_csv_or_dir_or_glob
 from app.tagged_dataset import build_tagged_dataset_csvs_from_config, sample_paths_interactively
@@ -343,7 +347,7 @@ def build_inference_context(
 # =========================================================
 def load_inference_time_range_config(config_path: str) -> Optional[Dict[str, Any]]:
     """
-    tagged_dataset_filter_infer.json から inference_time_range 設定を読む。
+    tagged dataset 設定から inference_time_range 設定を読む。
     設定が無い / enabled=false / 読込エラー の場合は None を返す。
     """
     path = Path(config_path)
@@ -354,6 +358,9 @@ def load_inference_time_range_config(config_path: str) -> Optional[Dict[str, Any
             cfg = json.load(f)
     except Exception:
         return None
+    infer_cfg = cfg.get("infer")
+    if isinstance(infer_cfg, dict):
+        cfg = infer_cfg
     tr = cfg.get("inference_time_range")
     if not isinstance(tr, dict):
         return None
@@ -400,6 +407,18 @@ def list_input_files(csv_arg: str) -> List[str]:
         return [str(input_path)]
     else:
         raise FileNotFoundError(f"--csv not found: {input_path.resolve(strict=False)}")
+
+
+def _resolve_input_directory(csv_arg: str) -> Optional[str]:
+    normalized_arg = str(csv_arg or "").strip()
+    if len(normalized_arg) >= 2 and normalized_arg[0] == normalized_arg[-1] and normalized_arg[0] in {'"', "'"}:
+        normalized_arg = normalized_arg[1:-1].strip()
+    if any(ch in normalized_arg for ch in "*?[]"):
+        return None
+    input_path = Path(normalized_arg).expanduser()
+    if input_path.is_dir():
+        return str(input_path)
+    return None
 def _normalize_path_key(path_str: str) -> str:
     return os.path.normpath(str(path_str)).replace("\\", "/").lower()
 def _coerce_optional_float(value: Any) -> Optional[float]:
@@ -949,7 +968,7 @@ def main():
         default_target=str(args.csv),
         project_root=str(PROJECT_ROOT),
         title="Select scoring input target",
-        include_tagged_option=True,
+        include_tagged_option=False,
     )
     print(f"[INFO] artifacts_dir={artifacts_dir}")
     print(f"[INFO] csv_target={csv_target}")
@@ -958,24 +977,33 @@ def main():
     # 推論用コンテキスト構築
     ctx = build_inference_context(cfg, thr_info, scaler, paths["model_path"], device)
     # 推論時 time 範囲設定の読み込み
+    tagged_infer_config_path = resolve_tagged_infer_config_path()
     inference_time_range = load_inference_time_range_config(
-        str(DEFAULT_TAGGED_FILTER_INFER_PATH)
+        str(tagged_infer_config_path)
     )
     if inference_time_range is None:
         raise ValueError(
-            f"inference_time_range is required but not found or disabled in: {DEFAULT_TAGGED_FILTER_INFER_PATH}"
+            f"inference_time_range is required but not found or disabled in: {tagged_infer_config_path}"
         )
     # 入力列挙
-    if csv_target == TAGGED_DATASET_TOKEN:
+    input_dir_override = None
+    if csv_target != TAGGED_DATASET_TOKEN:
+        input_dir_override = _resolve_input_directory(csv_target)
+    if csv_target == TAGGED_DATASET_TOKEN or input_dir_override is not None:
         try:
             files, report = build_tagged_dataset_csvs_from_config(
-                config_path=str(DEFAULT_TAGGED_FILTER_INFER_PATH),
+                config_path=str(tagged_infer_config_path),
                 pattern="*.csv",
+                override_search_roots=[input_dir_override] if input_dir_override is not None else None,
             )
         except Exception as e:
             print(f"[WARN] tagged dataset preparation failed: {repr(e)} -> inference is skipped.")
             return
+        if input_dir_override is not None:
+            print(f"[INFO] input directory override for tagged matching: {input_dir_override}")
         print(f"[INFO] tagged filter config: {report['config_path']}")
+        if report.get("config_profile"):
+            print(f"[INFO] tagged filter profile: {report['config_profile']}")
         print(f"[INFO] ledger file-name column: {report['file_name_column']}")
         print(
             f"[INFO] ledger rows: total={report['rows_total']}, "

@@ -1,5 +1,6 @@
 ﻿import argparse
 import datetime
+import glob
 import json
 import os
 from collections import deque
@@ -25,7 +26,8 @@ from models.transformer_autoencoder import CausalTransformerAutoencoder
 DEFAULT_INPUT_DIR = (PROJECT_ROOT / "datarecode_test").resolve()
 DEFAULT_HPARAMS_PATH = (PROJECT_ROOT / "config" / "hyperparams_common.json").resolve()
 DEFAULT_META_CSV_PATH = (PROJECT_ROOT / "config" / "inference_ground_truth.csv").resolve()
-DEFAULT_TAGGED_FILTER_INFER_PATH = (PROJECT_ROOT / "config" / "tagged_dataset_filter_infer.json").resolve()
+DEFAULT_TAGGED_DATASET_INFERENCE_CONFIG_PATH = (PROJECT_ROOT / "config" / "tagged_dataset_inference.json").resolve()
+DEFAULT_DEFINITION_PATH = (PROJECT_ROOT / "config" / "definition.json").resolve()
 LEGACY_DEFAULT_ARTIFACTS_DIR = (PROJECT_ROOT / "artifacts" / "transformer_ae").resolve()
 DEFAULT_VALID_RESULTS_DIR = (PROJECT_ROOT / "output" / "Valid_results").resolve()
 MODEL_NAME = "transformer_ae"
@@ -43,9 +45,49 @@ REQUIRED_SCORE_POLICY = {
     "threshold_source": "full_training_dataset",
     "legacy_compatibility": False,
 }
+
+
+def resolve_tagged_infer_config_path() -> Path:
+    return DEFAULT_TAGGED_DATASET_INFERENCE_CONFIG_PATH
 from app.ui.interactive import TAGGED_DATASET_TOKEN
 from app.ui.interactive import ensure_tty, prompt_artifacts_dir, prompt_csv_or_dir_or_glob
-from app.tagged_dataset import build_tagged_dataset_csvs_from_config, sample_paths_interactively
+from app.tagged_dataset import (
+    build_tagged_dataset_csvs_from_config,
+    is_tagged_dataset_ledger_path,
+    resolve_tagged_dataset_ledger_selector,
+    sample_paths_interactively,
+)
+from gofumi_ae.config import (
+    load_definition_file, extract_features_from_definition, extract_category_maps_from_definition,
+    extract_smoothing_config_from_definition, extract_threshold_config_from_definition,
+    extract_io_contract_from_definition
+)
+
+CSV_FALLBACK_ENCODINGS = ("utf-8-sig", "utf-8", "cp932", "shift_jis")
+
+
+def read_csv_with_fallback_encodings(csv_path: Any, **kwargs: Any) -> pd.DataFrame:
+    """
+    Read CSV with a small set of Windows-friendly encoding fallbacks.
+    """
+    last_error: Optional[Exception] = None
+    tried: List[str] = []
+    for encoding in CSV_FALLBACK_ENCODINGS:
+        try:
+            return pd.read_csv(csv_path, encoding=encoding, **kwargs)
+        except UnicodeDecodeError as exc:
+            tried.append(encoding)
+            last_error = exc
+    path_label = str(csv_path)
+    tried_label = ", ".join(tried) if tried else "none"
+    raise UnicodeDecodeError(
+        getattr(last_error, "encoding", "utf-8"),
+        getattr(last_error, "object", b""),
+        getattr(last_error, "start", 0),
+        getattr(last_error, "end", 1),
+        f"failed to decode CSV {path_label} with encodings: {tried_label}"
+    ) from last_error
+
 # =========================================================
 # 2) ユーティリティ（欠損マスク拡張・カテゴリ正規化・欠損行削除）
 # =========================================================
@@ -151,6 +193,46 @@ def load_artifacts(artifacts_dir: str) -> Tuple[Dict, Dict, "StandardScaler", Di
     scaler = joblib.load(scaler_path)
     paths = {"cfg_path": cfg_path, "thr_path": thr_path, "scaler_path": scaler_path, "model_path": model_path}
     return cfg, thr_info, scaler, paths
+
+def validate_definition_vs_artifacts(definition_path: str, artifacts_cfg: Dict[str, Any]) -> None:
+    """
+    定義ファイルと学習成果物（artifacts config.json）の一致を検証する。
+    
+    Args:
+        definition_path: config/definition.json のパス
+        artifacts_cfg: 学習時に保存された config.json の内容
+        
+    Raises:
+        ValueError: 不整合が見つかった場合
+    """
+    try:
+        definition = load_definition_file(definition_path)
+    except Exception as e:
+        print(f"[WARN] Definition validation skipped: {e}")
+        return
+    
+    # 特徴量順序の確認
+    feat_order_from_def, _, _ = extract_features_from_definition(definition)
+    feat_order_from_artifacts = artifacts_cfg.get("features", [])
+    
+    if feat_order_from_def != feat_order_from_artifacts:
+        raise ValueError(
+            f"Feature order mismatch:\n"
+            f"  Definition: {feat_order_from_def}\n"
+            f"  Artifacts:  {feat_order_from_artifacts}"
+        )
+    
+    # アーキテクチャの確認
+    arch_from_def = definition["model_config"].get("selected_architecture")
+    if isinstance(arch_from_def, dict):
+        arch_from_def = arch_from_def.get("value")
+    arch_from_artifacts = artifacts_cfg.get("architecture", None)
+    
+    if arch_from_artifacts and arch_from_def and arch_from_artifacts != arch_from_def:
+        print(f"[WARN] Architecture mismatch (definition={arch_from_def}, artifacts={arch_from_artifacts})")
+    
+    print(f"[INFO] Definition validation passed")
+
 def resolve_default_artifacts_dir() -> str:
     """
     Prefer config/hyperparams_common.json:out_dir when available.
@@ -348,7 +430,7 @@ def build_inference_context(
 # =========================================================
 def load_inference_time_range_config(config_path: str) -> Optional[Dict[str, Any]]:
     """
-    tagged_dataset_filter_infer.json から inference_time_range 設定を読む。
+    tagged dataset 設定から inference_time_range 設定を読む。
     設定が無い / enabled=false / 読込エラー の場合は None を返す。
     """
     path = Path(config_path)
@@ -359,6 +441,9 @@ def load_inference_time_range_config(config_path: str) -> Optional[Dict[str, Any
             cfg = json.load(f)
     except Exception:
         return None
+    infer_cfg = cfg.get("infer")
+    if isinstance(infer_cfg, dict):
+        cfg = infer_cfg
     tr = cfg.get("inference_time_range")
     if not isinstance(tr, dict):
         return None
@@ -382,12 +467,32 @@ def load_inference_time_range_config(config_path: str) -> Optional[Dict[str, Any
 # =========================================================
 # 4) 入力列挙（単一ファイル／ディレクトリ・再帰）
 # =========================================================
+def _strip_wrapping_quotes(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    return text
+
+
 def list_input_files(csv_arg: str) -> List[str]:
     """
     --csv がファイルならそのパス、ディレクトリなら配下の CSV を列挙して返す。
     recursive=True ならサブディレクトリまで探索。
     """
-    input_path = Path(csv_arg).expanduser()
+    normalized_arg = _strip_wrapping_quotes(csv_arg)
+    if any(ch in normalized_arg for ch in "*?[]"):
+        files = sorted(
+            {
+                str(Path(path))
+                for path in glob.glob(normalized_arg, recursive=True)
+                if Path(path).is_file() and Path(path).suffix.lower() == ".csv"
+            }
+        )
+        if not files:
+            raise FileNotFoundError(f"No CSV files matched glob: {normalized_arg}")
+        return files
+
+    input_path = Path(normalized_arg).expanduser()
     if input_path.is_dir():
         # Directory input is always scanned recursively.
         iterator = input_path.rglob("*")
@@ -402,9 +507,21 @@ def list_input_files(csv_arg: str) -> List[str]:
             raise FileNotFoundError(f"No CSV files found in directory: {input_path} (recursive scan enabled)")
         return files
     elif input_path.is_file():
+        if input_path.suffix.lower() != ".csv":
+            raise ValueError(f"Only CSV input is supported for --csv: {input_path}")
         return [str(input_path)]
     else:
         raise FileNotFoundError(f"--csv not found: {input_path.resolve(strict=False)}")
+
+
+def _resolve_input_directory(csv_arg: str) -> Optional[str]:
+    normalized_arg = _strip_wrapping_quotes(csv_arg)
+    if any(ch in normalized_arg for ch in "*?[]"):
+        return None
+    input_path = Path(normalized_arg).expanduser()
+    if input_path.is_dir():
+        return str(input_path)
+    return None
 def _normalize_path_key(path_str: str) -> str:
     return os.path.normpath(str(path_str)).replace("\\", "/").lower()
 def _coerce_optional_float(value: Any) -> Optional[float]:
@@ -436,7 +553,7 @@ def load_optional_meta_map(meta_csv_path: str, project_root: str) -> Dict[str, D
     if not path_obj.exists():
         print(f"[INFO] meta csv not found (optional): {path_obj}")
         return {}
-    df_meta = pd.read_csv(path_obj, encoding="utf-8-sig")
+    df_meta = read_csv_with_fallback_encodings(path_obj)
     col_map = {c.strip().lower(): c for c in df_meta.columns}
     path_col = None
     for candidate in ("relative_path", "path", "csv_path", "file"):
@@ -797,7 +914,7 @@ def compute_stream_scores_for_file(
     if tail_steps < 1:
         tail_steps = 1
     # CSV 読み込み
-    df = pd.read_csv(
+    df = read_csv_with_fallback_encodings(
         csv_path,
         na_values=["(nan)", "nan", "NaN", "NULL", "None", "", " "],
         keep_default_na=True,
@@ -973,6 +1090,11 @@ def main():
         default=None, 
         help="Legacy CSV output directory (optional)"
     )
+    parser.add_argument(
+        "--tagged_ledger",
+        default=None,
+        help="Tagged dataset ledger selector. Examples: ledger, ledger_fallbacks[0], or a ledger xlsx path.",
+    )
     args = parser.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ensure_tty()
@@ -986,33 +1108,75 @@ def main():
         default_target=str(args.csv),
         project_root=str(PROJECT_ROOT),
         title="Select scoring input target",
-        include_tagged_option=True,
+        include_tagged_option=False,
     )
     print(f"[INFO] artifacts_dir={artifacts_dir}")
     print(f"[INFO] csv_target={csv_target}")
+    preferred_tagged_ledger_path = None
+    tagged_infer_config_path = resolve_tagged_infer_config_path()
+    if args.tagged_ledger:
+        if csv_target == TAGGED_DATASET_TOKEN:
+            preferred_tagged_ledger_path = resolve_tagged_dataset_ledger_selector(
+                str(tagged_infer_config_path),
+                args.tagged_ledger,
+            )
+            print(f"[INFO] tagged_ledger selector={args.tagged_ledger}")
+            print(f"[INFO] resolved tagged ledger={preferred_tagged_ledger_path}")
+        else:
+            print(
+                "[INFO] tagged_ledger is ignored because an explicit csv target was selected"
+            )
+    if csv_target != TAGGED_DATASET_TOKEN:
+        try:
+            if is_tagged_dataset_ledger_path(csv_target, str(tagged_infer_config_path)):
+                preferred_tagged_ledger_path = csv_target
+                csv_target = TAGGED_DATASET_TOKEN
+                print("[INFO] detected tagged dataset ledger input -> use tagged dataset mode")
+        except Exception as e:
+            print(f"[WARN] failed to inspect tagged dataset ledger input: {e}")
     # アーティファクト読み込み
     cfg, thr_info, scaler, paths = load_artifacts(artifacts_dir)
+    
+    # 定義ファイルと学習成果物の一致確認
+    definition_path = str(DEFAULT_DEFINITION_PATH)
+    if os.path.isfile(definition_path):
+        try:
+            validate_definition_vs_artifacts(definition_path, cfg)
+        except Exception as e:
+            print(f"[WARN] Definition validation failed: {e}")
+    else:
+        print(f"[WARN] Definition file not found: {definition_path}")
+    
     # 推論用コンテキスト構築
     ctx = build_inference_context(cfg, thr_info, scaler, paths["model_path"], device)
     # 推論時 time 範囲設定の読み込み
     inference_time_range = load_inference_time_range_config(
-        str(DEFAULT_TAGGED_FILTER_INFER_PATH)
+        str(tagged_infer_config_path)
     )
     if inference_time_range is None:
         raise ValueError(
-            f"inference_time_range is required but not found or disabled in: {DEFAULT_TAGGED_FILTER_INFER_PATH}"
+            f"inference_time_range is required but not found or disabled in: {tagged_infer_config_path}"
         )
     # 入力列挙
-    if csv_target == TAGGED_DATASET_TOKEN:
+    input_dir_override = None
+    if csv_target != TAGGED_DATASET_TOKEN:
+        input_dir_override = _resolve_input_directory(csv_target)
+    if csv_target == TAGGED_DATASET_TOKEN or input_dir_override is not None:
         try:
             files, report = build_tagged_dataset_csvs_from_config(
-                config_path=str(DEFAULT_TAGGED_FILTER_INFER_PATH),
+                config_path=str(tagged_infer_config_path),
                 pattern="*.csv",
+                preferred_ledger_path=preferred_tagged_ledger_path,
+                override_search_roots=[input_dir_override] if input_dir_override is not None else None,
             )
         except Exception as e:
             print(f"[WARN] tagged dataset preparation failed: {repr(e)} -> inference is skipped.")
             return
+        if input_dir_override is not None:
+            print(f"[INFO] input directory override for tagged matching: {input_dir_override}")
         print(f"[INFO] tagged filter config: {report['config_path']}")
+        if report.get("config_profile"):
+            print(f"[INFO] tagged filter profile: {report['config_profile']}")
         print(f"[INFO] ledger file-name column: {report['file_name_column']}")
         print(
             f"[INFO] ledger rows: total={report['rows_total']}, "
@@ -1114,6 +1278,9 @@ def main():
     for fi, csv_path in enumerate(files, 1):
         p = Path(csv_path)
         try:
+            if p.suffix.lower() != ".csv":
+                logger.print(f"[WARN] skipped non-CSV input: {p.name}")
+                continue
             # 進行中を表示（1行上書き対象）
             head = f"[{fi}/{len(files)}] Processing: "
             file_disp = p.name  # ファイル名のみ。親ディレクトリも出す場合は f"{p.parent.name}/{p.name}"

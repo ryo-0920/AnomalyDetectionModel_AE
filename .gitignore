@@ -15,7 +15,7 @@ artifacts/
 output/
 outputs/
 result/
-1_transformer/result/
+1_transformer/
 .codex/validation/artifacts/
 node_modules/
 dist/
@@ -37,3 +37,6 @@ venv/
 .envrc
 .env
 .env.*
+.codex
+tests/
+test-cases/

@@ -38,87 +38,98 @@ from app.ui.interactive import NETWORK_DATASET_DIRS
 from app.ui.interactive import TAGGED_DATASET_TOKEN
 from app.ui.interactive import prompt_optimizer, prompt_training_dataset
 from app.tagged_dataset import build_tagged_dataset_csvs_from_config, sample_paths_interactively
+from gofumi_ae.config import (
+    load_definition_file, extract_features_from_definition, extract_category_maps_from_definition,
+    extract_model_config_from_definition, extract_threshold_config_from_definition
+)
 # =========================================================
 # 定数・特徴メタ情報
 # =========================================================
 NA_VALUES = ["(nan)", "nan", "NaN", "NULL", "None", "", " "]
-amp_dtype = torch.bfloat16
-FEATURES = [
-    #"abscontrol",
-    "accelerationfb","accelerationlr","accelpedalangle","angularvelocity",
-    "atshiftposition","brake",
-    #"brakepedal",
-    #"brakepressure",
-    "parkingbrake","speed",
-    "steeringangle",
-    #"trccontrol","turnlampswitchstatus","vsccontrol",
-    "wheelspeedfl","wheelspeedfr","wheelspeedrl","wheelspeedrr"
-]
-FEATURE_RULES = {
-    "accelerationfb":  {"sentinels": [99.0], "vmin": -20.0, "vmax": 20.0, "interp": "linear", "clip": True},
-    "accelerationlr":  {"sentinels": [99.0], "vmin": -20.0, "vmax": 20.0, "interp": "linear", "clip": True},
-    "accelpedalangle": {"sentinels": [999.0], "vmin": 0.0, "vmax": 100.0, "interp": "linear", "clip": True},
-    "angularvelocity": {"sentinels": [999.0], "vmin": -125.0, "vmax": 125.0, "interp": "linear", "clip": True},
-    "brake":           {"sentinels": [99.0], "vmin": 0.0, "vmax": 1.0, "interp": "linear", "clip": True},
-    #"brakepedal":      {"sentinels": [99.0], "vmin": 0.0, "vmax": 1.0, "interp": "linear", "clip": True},
-    #"brakepressure":   {"sentinels": [99.0], "vmin": 0.0, "vmax": 20.46, "interp": "linear", "clip": True},
-    "speed":           {"sentinels": [999.0], "vmin": -327.68, "vmax": 655.351, "interp": "linear", "clip": True},
-    "steeringangle":   {"sentinels": [9999.0], "vmin": -1044, "vmax": 1044, "interp": "linear", "clip": True},
-    "wheelspeedfl":    {"sentinels": [999.0], "vmin": -327.68, "vmax": 327.67, "interp": "linear", "clip": True},
-    "wheelspeedfr":    {"sentinels": [999.0], "vmin": -327.68, "vmax": 327.67, "interp": "linear", "clip": True},
-    "wheelspeedrl":    {"sentinels": [999.0], "vmin": -327.68, "vmax": 327.67, "interp": "linear", "clip": True},
-    "wheelspeedrr":    {"sentinels": [999.0], "vmin": -327.68, "vmax": 327.67, "interp": "linear", "clip": True},
-}
-DEFAULT_RULE = {"sentinels": [], "vmin": None, "vmax": None, "interp": "linear", "clip": False}
-CATEGORICAL_FEATURES = [
-    #"abscontrol",
-    "atshiftposition", 
-    #"brakepedal", 
-    "parkingbrake", 
-    #"trccontrol", "turnlampswitchstatus","vsccontrol",
-]
-DEFAULT_UNKNOWN_ID = -1.0
-SCORE_POLICY = {
-    "mae_target": "all_features",
-    "feature_weights": {
-        "continuous": 1.0,
-        "categorical": 1.0,
-    },
-    "threshold_source": "full_training_dataset",
-    "legacy_compatibility": False,
-}
-CATEGORY_MAPS = {
-    #"abscontrol": {"OFF": 0.0, "ON": 1.0, "UNKNOWN": DEFAULT_UNKNOWN_ID},
-    "atshiftposition": {"DEFAULT": 0.0, "P": 10.0, "R": 20.0, "N": 30.0, "D": 40.0, "B": 50.0, "NG":99.0, "UNKNOWN": DEFAULT_UNKNOWN_ID},
-    #"brakepedal": {"OFF": 0.0, "ON": 1.0, "NG":99.0, "UNKNOWN": DEFAULT_UNKNOWN_ID},
-    "parkingbrake": {"OFF": 0.0, "ON": 1.0, "UNKNOWN": DEFAULT_UNKNOWN_ID},
-    #"trccontrol": {"OFF": 0.0, "ON": 1.0, "UNKNOWN": DEFAULT_UNKNOWN_ID},
-    #"turnlampswitchstatus": {"NG":0, "LEFT": 1.0, "RIGHT": 2.0, "OFF": 3.0, "UNKNOWN": DEFAULT_UNKNOWN_ID},
-    #"vsccontrol": {"OFF": 0.0, "ON": 1.0, "UNKNOWN": DEFAULT_UNKNOWN_ID},
-}
-FEATURE_RULES.update({
-    #"abscontrol": {"interp": None, "clip": False},
-    "atshiftposition": {"interp": None, "clip": False},
-    #"brakepedal": {"interp": None, "clip": False},
-    "parkingbrake": {"interp": None, "clip": False},
-    #"trccontrol": {"interp": None, "clip": False},
-    #"turnlampswitchstatus": {"interp": None, "clip": False},
-    #"vsccontrol": {"interp": None, "clip": False},
-})
-TAGGED_FILTER_TRAIN_CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "tagged_dataset_filter_train.json")
+
+# グローバル変数：定義ファイルから初期化される
+# （メイン関数で load_definition_file を呼び出して初期化）
+FEATURES: List[str] = []
+FEATURE_RULES: Dict[str, Dict[str, Any]] = {}
+CATEGORICAL_FEATURES: List[str] = []
+DEFAULT_UNKNOWN_ID: float = -1.0
+CATEGORY_MAPS: Dict[str, Dict[str, float]] = {}
+DEFAULT_RULE: Dict[str, Any] = {}  # 定義ファイルから初期化される（initialize_from_definition で設定）
+SCORE_POLICY: Dict[str, Any] = {}  # 定義ファイルから初期化される（initialize_from_definition で設定）
+TAGGED_DATASET_TRAIN_CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "tagged_dataset_train.json")
 NETWORK_DATASET_DIRS_NORM = [os.path.normcase(os.path.normpath(p)) for p in NETWORK_DATASET_DIRS]
+
+# =========================================================
+# 定義ファイル初期化
+# =========================================================
+def initialize_from_definition(definition_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    定義ファイル（config/definition.json）を読み込んで、グローバル変数を初期化する。
+    
+    Args:
+        definition_path: 定義ファイルのパス（Noneの場合は config/definition.json）
+        
+    Returns:
+        定義ファイルの辞書
+    """
+    global FEATURES, FEATURE_RULES, CATEGORICAL_FEATURES, DEFAULT_UNKNOWN_ID, CATEGORY_MAPS, DEFAULT_RULE, SCORE_POLICY
+    
+    if definition_path is None:
+        definition_path = os.path.join(PROJECT_ROOT, "config", "definition.json")
+    
+    # 定義ファイルの読み込み
+    definition = load_definition_file(definition_path)
+    print(f"[INFO] Definition file loaded: {definition_path}")
+    
+    # 特徴量情報の抽出
+    features_ordered, categorical_features, feature_rules = extract_features_from_definition(definition)
+    FEATURES = features_ordered
+    CATEGORICAL_FEATURES = categorical_features
+    FEATURE_RULES = feature_rules
+    
+    # カテゴリマッピングの抽出
+    unknown_id = definition["feature_definition"].get("unknown_category_id", -1.0)
+    DEFAULT_UNKNOWN_ID = unknown_id
+    CATEGORY_MAPS = extract_category_maps_from_definition(definition)
+    
+    # 欠損ルールのデフォルト値（定義ファイルから）
+    DEFAULT_RULE = definition["missing_rules"].get("default_rule", {
+        "sentinels": [], "vmin": None, "vmax": None, "interp": "linear", "clip": False
+    })
+    
+    # スコアポリシー（定義ファイルの threshold_config から構築）
+    thr_cfg = definition.get("threshold_config", {})
+    SCORE_POLICY = {
+        "mae_target": thr_cfg.get("score_target", "all_features"),
+        "feature_weights": thr_cfg.get("weight_policy", {"continuous": 1.0, "categorical": 1.0}),
+        "threshold_source": thr_cfg.get("threshold_source", "full_training_dataset"),
+        "legacy_compatibility": False,
+    }
+    
+    print(f"[INFO] Loaded {len(FEATURES)} features: {FEATURES}")
+    print(f"[INFO] Categorical features: {CATEGORICAL_FEATURES}")
+    
+    return definition
 def _is_network_path_or_child(path: str) -> bool:
     p_norm = os.path.normcase(os.path.normpath(path))
     for root in NETWORK_DATASET_DIRS_NORM:
         if p_norm == root or p_norm.startswith(root + os.sep):
             return True
     return False
+
+
+def resolve_tagged_train_config_path() -> str:
+    return TAGGED_DATASET_TRAIN_CONFIG_PATH
+
+
 def build_tagged_training_csvs(seed: int) -> List[str]:
     csv_paths, report = build_tagged_dataset_csvs_from_config(
-        config_path=TAGGED_FILTER_TRAIN_CONFIG_PATH,
+        config_path=resolve_tagged_train_config_path(),
         pattern="*.csv",
     )
     print(f"[INFO] tagged filter config: {report['config_path']}")
+    if report.get("config_profile"):
+        print(f"[INFO] tagged filter profile: {report['config_profile']}")
     print(f"[INFO] ledger file-name column: {report['file_name_column']}")
     print(
         f"[INFO] ledger rows: total={report['rows_total']}, "
@@ -209,6 +220,85 @@ def read_csv_lower(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, na_values=NA_VALUES, keep_default_na=True, low_memory=False)
     df.columns = [c.strip().lower() for c in df.columns]
     return df
+
+def filter_dataframe_by_column_range(
+    df: pd.DataFrame,
+    filter_column: str,
+    start_value: float,
+    end_value: float,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    指定列の値が [start_value, end_value] 範囲内のデータのみを返す
+    
+    Args:
+        df: 入力DataFrame
+        filter_column: フィルタ対象列名
+        start_value: 範囲の下限（数値）
+        end_value: 範囲の上限（数値）
+    
+    Returns:
+        フィルター後のDataFrame
+    """
+    if filter_column not in df.columns:
+        raise ValueError(f"Filter column '{filter_column}' not found in CSV. Available columns: {list(df.columns)}")
+    
+    mask = (df[filter_column] >= start_value) & (df[filter_column] <= end_value)
+    filtered_df = df[mask].reset_index(drop=True)
+    
+    if verbose:
+        print(f"[INFO] Filtered by {filter_column} in [{start_value}, {end_value}] -> {len(filtered_df)} rows (from {len(df)} rows)")
+    
+    return filtered_df
+
+
+def extract_dataframe_by_frame_range_mode(
+    df: pd.DataFrame,
+    filter_column: str,
+    start_value: float,
+    end_value: float,
+    seq_len: int,
+    train_window_mode: str,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    analyze_accel_distribution.py と同じ mode1 / mode2 の切り出しを学習側へ適用する。
+
+    mode1: start_value より seq_len * 0.1 だけ前方へ広げて end_value まで切り出す。
+    mode2: [start_value, end_value] に完全に収まる範囲だけを切り出す。
+    """
+    filter_column_norm = str(filter_column).strip().lower()
+    if filter_column_norm not in df.columns:
+        raise ValueError(f"Filter column '{filter_column}' not found in CSV. Available columns: {list(df.columns)}")
+
+    n_rows = int(len(df))
+    filter_values = pd.to_numeric(df[filter_column_norm], errors="coerce").to_numpy(dtype=float)
+    mask = np.isfinite(filter_values)
+    if not np.any(mask):
+        raise ValueError(f"no valid values in frame range filter column '{filter_column}'")
+
+    actual_indices = np.where(mask)[0]
+    frame_idx_start = actual_indices[np.argmin(np.abs(filter_values[mask] - start_value))]
+    frame_idx_end = actual_indices[np.argmin(np.abs(filter_values[mask] - end_value))]
+    if frame_idx_end <= frame_idx_start:
+        raise ValueError(f"invalid frame range [{frame_idx_start}, {frame_idx_end}]")
+
+    if train_window_mode == "mode2":
+        extracted_start = frame_idx_start
+    else:
+        start_value_past = start_value - (seq_len * 0.1)
+        frame_idx_past = actual_indices[np.argmin(np.abs(filter_values[mask] - start_value_past))]
+        extracted_start = frame_idx_past
+
+    extracted_end = min(frame_idx_end + 1, n_rows)
+    extracted_df = df.iloc[extracted_start:extracted_end].reset_index(drop=True)
+    if verbose:
+        print(
+            f"[INFO] Filtered by {filter_column} in [{start_value}, {end_value}] "
+            f"with {train_window_mode} -> {len(extracted_df)} rows (from {len(df)} rows)"
+        )
+    return extracted_df
+
 def require_columns(df: pd.DataFrame, path: str) -> None:
     missing = [f for f in FEATURES if f not in df.columns]
     if missing:
@@ -318,6 +408,8 @@ class SequenceDatasetMaskedSegments(Dataset):
     """
     改良版: 全ウィンドウの開始位置を列挙せず、各セグメントのウィンドウ数の累積和で
     グローバル idx -> (seg, t) を計算する。
+    
+    仕様§10.3 に従い、フレーム範囲の境界付近のウィンドウ（前後のコンテキスト不足）を除外する。
     """
     def __init__(self, xs: Sequence[np.ndarray], ms: Sequence[np.ndarray], seq_len: int,
                  names: Optional[Sequence[str]] = None, return_index: bool = False):
@@ -326,23 +418,33 @@ class SequenceDatasetMaskedSegments(Dataset):
         self.return_index = return_index
         self.seg_names = list(names) if names is not None else [f"seg_{i}" for i in range(len(xs))]
         self.seg_win_counts: List[int] = []
+        self.seg_min_t: List[int] = []  # 各セグメントのウィンドウ開始位置の最小値
         total = 0
         self.cum: List[int] = [0]
         for s, (X, M) in enumerate(zip(xs, ms)):
             assert X.shape == M.shape, f"seg {s}: X と mask の形状が一致していません: {X.shape} != {M.shape}"
-            n_w = max(0, X.shape[0] - seq_len + 1)
+            # 境界除外: ウィンドウの最初のフレームが seq_len-1 以上、
+            # ウィンドウの最後のフレームが X.shape[0]-seq_len 以下となるように制限
+            min_t = seq_len - 1  # ウィンドウ開始位置の最小値（前のコンテキスト確保）
+            max_t_inclusive = X.shape[0] - seq_len  # ウィンドウ開始位置の最大値（後のコンテキスト確保）
+            if max_t_inclusive >= min_t:
+                n_w = max_t_inclusive - min_t + 1
+            else:
+                n_w = 0
+            self.seg_min_t.append(min_t)
             self.seg_win_counts.append(n_w)
             total += n_w
             self.cum.append(total)
         if total == 0:
-            raise ValueError(f"全セグメントで seq_len={seq_len} のウィンドウが構築できません")
+            raise ValueError(f"全セグメントで seq_len={seq_len} のウィンドウが構築できません（境界除外後）")
         self.N_windows_total = total
     def __len__(self) -> int:
         return self.N_windows_total
     def _locate(self, idx: int) -> Tuple[int, int]:
         r = bisect.bisect_right(self.cum, idx)
         s = r - 1
-        t = idx - self.cum[s]
+        t_relative = idx - self.cum[s]
+        t = self.seg_min_t[s] + t_relative  # 相対位置を絶対位置に変換
         return s, t
     def __getitem__(self, idx: int):
         if idx < 0 or idx >= self.N_windows_total:
@@ -388,8 +490,25 @@ def encode_with_scaler_and_onehot(df: pd.DataFrame, mask: np.ndarray,
     X = np.concatenate([X_cont, X_cat], axis=1).astype(np.float32)
     mask_expanded = expand_mask_for_onehot(mask, idx_cont, specs, offsets).astype(np.float32)
     return X, mask_expanded
-def load_and_prepare(csv_path: str) -> Tuple[pd.DataFrame, np.ndarray, StandardScaler, np.ndarray, Dict[str, Any]]:
+def load_and_prepare(
+    csv_path: str,
+    filter_column: Optional[str] = None,
+    filter_start_value: Optional[float] = None,
+    filter_end_value: Optional[float] = None,
+    seq_len: int = 128,
+    train_window_mode: str = "mode1",
+) -> Tuple[pd.DataFrame, np.ndarray, StandardScaler, np.ndarray, Dict[str, Any]]:
     df = read_csv_lower(csv_path); require_columns(df, csv_path)
+    if filter_column is not None and filter_start_value is not None and filter_end_value is not None:
+        df = extract_dataframe_by_frame_range_mode(
+            df,
+            filter_column,
+            filter_start_value,
+            filter_end_value,
+            seq_len=seq_len,
+            train_window_mode=train_window_mode,
+            verbose=True,
+        )
     df, mask, dropped = preprocess_df_for_training(df, os.path.basename(csv_path))
     if dropped > 0:
         print(f"[INFO] missdrop files=1/1 dropped={dropped} remain_rows={len(df)} h=all")
@@ -413,7 +532,14 @@ def load_and_prepare(csv_path: str) -> Tuple[pd.DataFrame, np.ndarray, StandardS
         "input_dim": int(X.shape[1]),
     }
     return df, X, scaler, mask_expanded, layout
-def load_and_prepare_many(csv_paths: List[str]) -> Tuple[List[np.ndarray], StandardScaler, List[np.ndarray], Dict[str, Any], List[str]]:
+def load_and_prepare_many(
+    csv_paths: List[str],
+    filter_column: Optional[str] = None,
+    filter_start_value: Optional[float] = None,
+    filter_end_value: Optional[float] = None,
+    seq_len: int = 128,
+    train_window_mode: str = "mode1",
+) -> Tuple[List[np.ndarray], StandardScaler, List[np.ndarray], Dict[str, Any], List[str]]:
     if not csv_paths:
         raise ValueError("csv_paths が空です")
     CONTINUOUS_FEATURES = [f for f in FEATURES if f not in CATEGORICAL_FEATURES]
@@ -430,6 +556,19 @@ def load_and_prepare_many(csv_paths: List[str]) -> Tuple[List[np.ndarray], Stand
     for idx, p in enumerate(csv_paths, start=1):
         try:
             df = read_csv_lower(p); require_columns(df, p)
+            
+            # Apply frame range filtering if specified
+            if filter_column is not None and filter_start_value is not None and filter_end_value is not None:
+                df = extract_dataframe_by_frame_range_mode(
+                    df,
+                    filter_column,
+                    filter_start_value,
+                    filter_end_value,
+                    seq_len=seq_len,
+                    train_window_mode=train_window_mode,
+                    verbose=False,
+                )
+            
             df, mask, dropped = preprocess_df_for_training(df, os.path.basename(p))
             if dropped > 0:
                 files_with_drop += 1
@@ -502,8 +641,13 @@ def load_and_prepare_many(csv_paths: List[str]) -> Tuple[List[np.ndarray], Stand
         "input_dim": int(in_dim),
     }
     return X_list, scaler, mask_list, layout, used_paths
-def prepare_training_data(csv: str, csvdir: Optional[str], pattern: str, seq_len: int,
-                          csv_paths_override: Optional[Sequence[str]] = None
+def prepare_training_data(
+    csv: str, csvdir: Optional[str], pattern: str, seq_len: int,
+    csv_paths_override: Optional[Sequence[str]] = None,
+    filter_column: Optional[str] = None,
+    filter_start_value: Optional[float] = None,
+    filter_end_value: Optional[float] = None,
+    train_window_mode: str = "mode1",
 ) -> Tuple[Optional[Dataset], int, Optional[StandardScaler], Optional[Dict[str, Any]], List[str]]:
     if csv_paths_override is not None:
         unique_paths: List[str] = []
@@ -524,7 +668,14 @@ def prepare_training_data(csv: str, csvdir: Optional[str], pattern: str, seq_len
             print("[WARN] csv_paths_override did not contain any existing CSV files -> 学習をスキップします。")
             return None, 0, None, None, []
         try:
-            X_list, scaler, mask_list, layout, used_paths = load_and_prepare_many(unique_paths)
+            X_list, scaler, mask_list, layout, used_paths = load_and_prepare_many(
+                unique_paths,
+                filter_column=filter_column,
+                filter_start_value=filter_start_value,
+                filter_end_value=filter_end_value,
+                seq_len=seq_len,
+                train_window_mode=train_window_mode,
+            )
             input_dim = int(X_list[0].shape[1])
             dataset = SequenceDatasetMaskedSegments(X_list, mask_list, seq_len, names=used_paths, return_index=True)
             return dataset, input_dim, scaler, layout, used_paths
@@ -541,7 +692,14 @@ def prepare_training_data(csv: str, csvdir: Optional[str], pattern: str, seq_len
             print(f"[WARN] {source_dir} に {pattern} が見つかりません{suffix} -> 学習をスキップします。")
             return None, 0, None, None, []
         try:
-            X_list, scaler, mask_list, layout, used_paths = load_and_prepare_many(csv_paths)
+            X_list, scaler, mask_list, layout, used_paths = load_and_prepare_many(
+                csv_paths,
+                filter_column=filter_column,
+                filter_start_value=filter_start_value,
+                filter_end_value=filter_end_value,
+                seq_len=seq_len,
+                train_window_mode=train_window_mode,
+            )
             input_dim = int(X_list[0].shape[1])
             dataset = SequenceDatasetMaskedSegments(X_list, mask_list, seq_len, names=used_paths, return_index=True)
             return dataset, input_dim, scaler, layout, used_paths
@@ -550,7 +708,14 @@ def prepare_training_data(csv: str, csvdir: Optional[str], pattern: str, seq_len
             return None, 0, None, None, []
     else:
         try:
-            _, X, scaler, mask, layout = load_and_prepare(csv)
+            _, X, scaler, mask, layout = load_and_prepare(
+                csv,
+                filter_column=filter_column,
+                filter_start_value=filter_start_value,
+                filter_end_value=filter_end_value,
+                seq_len=seq_len,
+                train_window_mode=train_window_mode,
+            )
             input_dim = int(X.shape[1])
             dataset = SequenceDatasetMasked(X, mask, seq_len)
             return dataset, input_dim, scaler, layout, [csv]
@@ -636,7 +801,8 @@ def _build_optimizer(model: torch.nn.Module, lr: float, device: str, weight_deca
     except TypeError:
         return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 def amp_ctx(device: str, use_amp: bool):
-    return amp.autocast('cuda', enabled=(use_amp and device == "cuda"), dtype=amp_dtype) if device == "cuda" else nullcontext()
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    return amp.autocast('cuda', enabled=(use_amp and device == "cuda"), dtype=dtype) if device == "cuda" else nullcontext()
 def compute_masked_mse_loss(recon: torch.Tensor, target: torch.Tensor, miss_mask: torch.Tensor) -> torch.Tensor:
     obs_mask = 1.0 - miss_mask
     mse = F.mse_loss(recon, target, reduction="none")
@@ -730,7 +896,7 @@ def _fit_single_split(train_ds: Subset, val_ds: Optional[Subset], *, input_dim: 
     print(f"[DBG] train_windows={len(train_ds)}, batch_size={batch_size}, drop_last={drop_last_train} => train_batches={len(train_loader)}")
     if val_loader is not None:
         print(f"[DBG] val_windows={len(val_ds)}, batch_size={batch_size}, drop_last={drop_last_val} => val_batches={len(val_loader)}")
-    use_fp16 = (use_amp and device == "cuda" and amp_dtype == torch.float16)
+    use_fp16 = (use_amp and device == "cuda" and not torch.cuda.is_bf16_supported())
     scaler_amp = amp.GradScaler('cuda', enabled=use_fp16)
     train_epoch_losses: List[float] = []
     val_epoch_losses: List[float] = []
@@ -772,9 +938,9 @@ def train_on_dataset(dataset: Dataset, input_dim: int, seq_len: int, batch_size:
                      split_seed: int = 42, grad_clip_max_norm: float = 1.0
 ) -> Tuple[CausalTransformerAutoencoder, Dict[str, float]]:
     if isinstance(dataset, SequenceDatasetMaskedSegments):
-        train_ds, val_ds = split_segments(dataset, train_ratio=train_ratio, gap=seq_len, seed=split_seed)
+        train_ds, val_ds = split_segments(dataset, train_ratio=train_ratio, gap=0, seed=split_seed)
     elif isinstance(dataset, SequenceDatasetMasked):
-        train_ds, val_ds = split_timewise_with_gap(dataset, train_ratio=train_ratio, gap=seq_len)
+        train_ds, val_ds = split_timewise_with_gap(dataset, train_ratio=train_ratio, gap=0)
     else:
         train_ds, val_ds = split_dataset_timewise(dataset, train_ratio=train_ratio)
     return _fit_single_split(
@@ -824,6 +990,13 @@ def compute_threshold_on_dataset(model, dataset, device, percentile=99.5, use_am
     p50 = float(np.percentile(errs_arr, 50))
     p90 = float(np.percentile(errs_arr, 90))
     p99 = float(np.percentile(errs_arr, 99))
+    p99_9 = float(np.percentile(errs_arr, 99.9))
+    p99_95 = float(np.percentile(errs_arr, 99.95))
+    p99_97 = float(np.percentile(errs_arr, 99.97))
+    p99_99 = float(np.percentile(errs_arr, 99.99))
+    p99_995 = float(np.percentile(errs_arr, 99.995))
+    p99_999 = float(np.percentile(errs_arr, 99.999))
+    p99_9999 = float(np.percentile(errs_arr, 99.9999))
     thr = float(np.percentile(errs_arr, percentile))
     temperature = float(max((p90 - p50) / 6.0, 1e-6))
     return {
@@ -834,6 +1007,13 @@ def compute_threshold_on_dataset(model, dataset, device, percentile=99.5, use_am
         "p50": p50,
         "p90": p90,
         "p99": p99,
+        "p99_9": p99_9,
+        "p99_95": p99_95,
+        "p99_97": p99_97,
+        "p99_99": p99_99,
+        "p99_995": p99_995,
+        "p99_999": p99_999,
+        "p99_9999": p99_9999,
         "percentile": float(percentile),
         "temperature": temperature,
         "n_samples": int(errs_arr.size),
@@ -990,15 +1170,13 @@ def main():
     default_csv = os.path.normpath(
         os.path.join(SCRIPT_DIR, "..", "datarecode_train", "02_20260213_dataset_normal_train")
     )
-    default_hparams = os.path.normpath(
-        os.path.join(SCRIPT_DIR, "..", "config", "hyperparams_common.json")
-    )
     parser = argparse.ArgumentParser(description="Train Transformer Autoencoder for pedal misapplication detection")
     parser.add_argument("--csv", "-i", dest="csv", type=str, default=default_csv, help="Path to single training CSV or directory")
     parser.add_argument("--csvdir", "-d", dest="csvdir", type=str, default=None, help="Directory containing multiple CSVs")
     parser.add_argument("--pattern", type=str, default="*.csv", help="Glob pattern for CSVs in --csvdir or --csv when it is a directory")
+    parser.add_argument("--train-window-mode", type=str, choices=["mode1", "mode2"], default=None, help="Train window extraction mode")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed for reproducibility (overrides hparams random_seed)")
-    parser.add_argument("--hparams", type=str, default=default_hparams, help="Path to JSON file for hyperparameter overrides")
+    parser.add_argument("--hparams", type=str, default=None, help="Optional JSON path for explicit hyperparameter overrides")
     parser.add_argument(
         "--no-dataset-prompt",
         action="store_true",
@@ -1007,9 +1185,36 @@ def main():
     a = parser.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_amp = (device == "cuda")
-    global amp_dtype
-    amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    print(f"[INFO] device={device}, amp={'ON' if use_amp else 'OFF'}, dtype={('bf16' if amp_dtype==torch.bfloat16 else 'fp16') if use_amp else 'N/A'}")
+    _amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    print(f"[INFO] device={device}, amp={'ON' if use_amp else 'OFF'}, dtype={('bf16' if _amp_dtype==torch.bfloat16 else 'fp16') if use_amp else 'N/A'}")
+    
+    # 定義ファイルの読み込みと初期化
+    definition_path = os.path.join(PROJECT_ROOT, "config", "definition.json")
+    try:
+        definition = initialize_from_definition(definition_path)
+    except Exception as e:
+        print(f"[ERROR] Failed to load definition file: {e}")
+        print(f"[INFO] Using built-in defaults as fallback")
+        definition = None
+    
+    # モデル設定をhparamに統合
+    hparams_from_definition = {}
+    frame_range_config = {}
+    if definition:
+        try:
+            from gofumi_ae.config import (
+                extract_model_config_from_definition,
+                extract_threshold_config_from_definition,
+                extract_frame_range_config_from_definition
+            )
+            model_cfg = extract_model_config_from_definition(definition)
+            thr_cfg = extract_threshold_config_from_definition(definition)
+            frame_range_config = extract_frame_range_config_from_definition(definition)
+            hparams_from_definition.update(model_cfg)
+            hparams_from_definition["percentile"] = thr_cfg.get("percentile", 99.5)
+        except Exception as e:
+            print(f"[WARN] Failed to extract model config from definition: {e}")
+    
     hparams = {
         "seq_len": 128,
         "batch_size": 128,
@@ -1032,7 +1237,14 @@ def main():
         "random_seed": 42,
         "strict_deterministic": True,
         "tail_steps": 1,
+        "train_window_mode": "mode1",
     }
+    
+    # 定義ファイルから得た値を hparams に統合
+    if hparams_from_definition:
+        for k, v in hparams_from_definition.items():
+            if k in hparams:
+                hparams[k] = v
     if a.hparams and os.path.isfile(a.hparams):
         try:
             with open(a.hparams, "r", encoding="utf-8-sig") as f:
@@ -1052,8 +1264,10 @@ def main():
                 print(f"[WARN] Unknown hparams keys ignored: {unknown}")
         except Exception as e:
             print(f"[WARN] hparams load failed: {repr(e)} -> built-in defaults are used.")
+    elif a.hparams:
+        print(f"[WARN] hparams file not found, ignored: {a.hparams}")
     else:
-        print(f"[INFO] hparams file not found, built-in defaults are used: {a.hparams}")
+        print("[INFO] hparams override disabled; using definition.json and built-in fallbacks only")
     if a.no_dataset_prompt:
         print("[WARN] --no-dataset-prompt is ignored. Interactive mode is always enabled.")
     opt_default = str(hparams.get("optimizer", "adamw")).strip().lower()
@@ -1095,8 +1309,15 @@ def main():
         seed=seed_value, amp=use_amp,
         **hparams,
     )
+    if a.train_window_mode is not None:
+        args.train_window_mode = a.train_window_mode
     print(f"[INFO] seed={args.seed}")
     print(f"[INFO] strict_deterministic={bool(args.strict_deterministic)}")
+    print(f"[INFO] train_window_mode={args.train_window_mode}")
+    print(
+        f"[INFO] effective model config: seq_len={args.seq_len}, batch_size={args.batch_size}, "
+        f"epochs={args.epochs}, tail_steps={args.tail_steps}"
+    )
     set_global_seed(args.seed, strict_deterministic=bool(args.strict_deterministic))
     if torch.cuda.is_available():
         try:
@@ -1111,6 +1332,10 @@ def main():
         args.pattern,
         args.seq_len,
         csv_paths_override=csv_paths_override,
+        filter_column=frame_range_config.get("filter_column"),
+        filter_start_value=float(frame_range_config.get("start_value", "-20")) if frame_range_config.get("start_value") else None,
+        filter_end_value=float(frame_range_config.get("end_value", "20")) if frame_range_config.get("end_value") else None,
+        train_window_mode=args.train_window_mode,
     )
 # ---------- ここから追加 ----------
     # dataset がセグメント型か単一型かで train/valid のファイル一覧を決定して保存する

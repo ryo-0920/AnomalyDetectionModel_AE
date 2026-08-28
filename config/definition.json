@@ -1,0 +1,193 @@
+{
+  "version": "0.1.0",
+
+  "feature_definition": {
+    "unknown_category_handling": "use_unknown_id",
+    "unknown_category_id": -1.0,
+    "feature_order": [
+      "accelerationfb",
+      "accelerationlr",
+      "accelpedalangle",
+      "angularvelocity",
+      "atshiftposition",
+      "brake",
+      "parkingbrake",
+      "speed",
+      "steeringangle",
+      "wheelspeedfl",
+      "wheelspeedfr",
+      "wheelspeedrl",
+      "wheelspeedrr"
+    ],
+    "feature_catalog": [
+      { "name": "abscontrol",          "type": "categorical", "enabled": false, "note": "ABS制御状態" },
+      { "name": "accelerationfb",      "type": "continuous",  "enabled": true,  "note": "前後加速度" },
+      { "name": "accelerationlr",      "type": "continuous",  "enabled": true,  "note": "左右加速度" },
+      { "name": "accelpedalangle",     "type": "continuous",  "enabled": true,  "note": "アクセル開度" },
+      { "name": "angularvelocity",     "type": "continuous",  "enabled": true,  "note": "角速度" },
+      { "name": "atshiftposition",     "type": "categorical", "enabled": true,  "note": "シフト位置" },
+      { "name": "brake",               "type": "continuous",  "enabled": true,  "note": "ブレーキ状態" },
+      { "name": "brakepedal",          "type": "categorical", "enabled": false, "note": "ブレーキペダル操作" },
+      { "name": "brakepressure",       "type": "continuous",  "enabled": false, "note": "ブレーキ液圧" },
+      { "name": "parkingbrake",        "type": "categorical", "enabled": true,  "note": "パーキングブレーキ状態" },
+      { "name": "speed",               "type": "continuous",  "enabled": true,  "note": "車速" },
+      { "name": "steeringangle",       "type": "continuous",  "enabled": true,  "note": "操舵角" },
+      { "name": "trccontrol",          "type": "categorical", "enabled": false, "note": "TRC制御状態" },
+      { "name": "turnlampswitchstatus","type": "categorical", "enabled": false, "note": "ターンランプスイッチ状態" },
+      { "name": "vsccontrol",          "type": "categorical", "enabled": false, "note": "VSC制御状態" },
+      { "name": "wheelspeedfl",        "type": "continuous",  "enabled": true,  "note": "左前輪速" },
+      { "name": "wheelspeedfr",        "type": "continuous",  "enabled": true,  "note": "右前輪速" },
+      { "name": "wheelspeedrl",        "type": "continuous",  "enabled": true,  "note": "左後輪速" },
+      { "name": "wheelspeedrr",        "type": "continuous",  "enabled": true,  "note": "右後輪速" }
+    ]
+  },
+
+  "category_definition": {
+    "numeric_input_rounding": "round_half_up",
+    "category_missing_fill": "forward_fill_then_unknown",
+    "categories": {
+      "abscontrol": {
+        "OFF": 0.0,
+        "ON": 1.0,
+        "UNKNOWN": -1.0
+      },
+      "atshiftposition": {
+        "DEFAULT": 0.0,
+        "P": 10.0,
+        "R": 20.0,
+        "N": 30.0,
+        "D": 40.0,
+        "B": 50.0,
+        "NG": 99.0,
+        "UNKNOWN": -1.0
+      },
+      "brakepedal": {
+        "OFF": 0.0,
+        "ON": 1.0,
+        "NG": 99.0,
+        "UNKNOWN": -1.0
+      },
+      "parkingbrake": {
+        "OFF": 0.0,
+        "ON": 1.0,
+        "UNKNOWN": -1.0
+      },
+      "trccontrol": {
+        "OFF": 0.0,
+        "ON": 1.0,
+        "UNKNOWN": -1.0
+      },
+      "turnlampswitchstatus": {
+        "NG": 0.0,
+        "LEFT": 1.0,
+        "RIGHT": 2.0,
+        "OFF": 3.0,
+        "UNKNOWN": -1.0
+      },
+      "vsccontrol": {
+        "OFF": 0.0,
+        "ON": 1.0,
+        "UNKNOWN": -1.0
+      }
+    }
+  },
+
+  "missing_rules": {
+    "default_rule": {
+      "sentinels": [],
+      "vmin": null,
+      "vmax": null,
+      "interp": "linear",
+      "clip": false
+    },
+    "rules": {
+      "accelerationfb":      { "sentinels": [99.0],   "vmin": -20.0,   "vmax": 20.0,    "interp": "linear", "clip": true  },
+      "accelerationlr":      { "sentinels": [99.0],   "vmin": -20.0,   "vmax": 20.0,    "interp": "linear", "clip": true  },
+      "accelpedalangle":     { "sentinels": [999.0],  "vmin": 0.0,     "vmax": 100.0,   "interp": "linear", "clip": true  },
+      "angularvelocity":     { "sentinels": [999.0],  "vmin": -125.0,  "vmax": 125.0,   "interp": "linear", "clip": true  },
+      "brake":               { "sentinels": [99.0],   "vmin": 0.0,     "vmax": 1.0,     "interp": "linear", "clip": true  },
+      "brakepedal":          { "sentinels": [99.0],   "vmin": 0.0,     "vmax": 1.0,     "interp": null,     "clip": false },
+      "brakepressure":       { "sentinels": [99.0],   "vmin": 0.0,     "vmax": 20.46,   "interp": "linear", "clip": true  },
+      "speed":               { "sentinels": [999.0],  "vmin": -327.68, "vmax": 655.351, "interp": "linear", "clip": true  },
+      "steeringangle":       { "sentinels": [9999.0], "vmin": -1044.0, "vmax": 1044.0,  "interp": "linear", "clip": true  },
+      "wheelspeedfl":        { "sentinels": [999.0],  "vmin": -327.68, "vmax": 327.67,  "interp": "linear", "clip": true  },
+      "wheelspeedfr":        { "sentinels": [999.0],  "vmin": -327.68, "vmax": 327.67,  "interp": "linear", "clip": true  },
+      "wheelspeedrl":        { "sentinels": [999.0],  "vmin": -327.68, "vmax": 327.67,  "interp": "linear", "clip": true  },
+      "wheelspeedrr":        { "sentinels": [999.0],  "vmin": -327.68, "vmax": 327.67,  "interp": "linear", "clip": true  },
+      "abscontrol":          { "sentinels": [],        "vmin": null,    "vmax": null,    "interp": null,     "clip": false },
+      "atshiftposition":     { "sentinels": [],        "vmin": null,    "vmax": null,    "interp": null,     "clip": false },
+      "parkingbrake":        { "sentinels": [],        "vmin": null,    "vmax": null,    "interp": null,     "clip": false },
+      "trccontrol":          { "sentinels": [],        "vmin": null,    "vmax": null,    "interp": null,     "clip": false },
+      "turnlampswitchstatus":{ "sentinels": [],        "vmin": null,    "vmax": null,    "interp": null,     "clip": false },
+      "vsccontrol":          { "sentinels": [],        "vmin": null,    "vmax": null,    "interp": null,     "clip": false }
+    }
+  },
+
+  "model_config": {
+    "seq_len": 32,
+    "batch_size": 128,
+    "epochs": 20,
+    "lr": 0.0003,
+    "d_model": 128,
+    "nhead": 8,
+    "num_layers": 4,
+    "dim_ff": 512,
+    "dropout": 0.2,
+    "val_ratio": 0.2,
+    "weight_decay": 0.0001,
+    "max_norm": 1.0,
+    "random_seed": 42,
+    "tail_steps": 50,
+    "architecture_candidates": [
+      { "id": "transformer_encoder_autoencoder", "description": "Transformer encoder based autoencoder" },
+      { "id": "lstm_autoencoder",                "description": "LSTM based autoencoder" }
+    ],
+    "selected_architecture": "transformer_encoder_autoencoder"
+  },
+
+  "threshold_config": {
+    "percentile": 99.9999,
+    "threshold_source": "full_training_dataset",
+    "score_target": "all_features",
+    "weight_policy": {
+      "continuous":  1.0,
+      "categorical": 1.0
+    },
+    "file_score_aggregation": "both"
+  },
+
+  "smoothing_config": {
+    "smooth_window": 5,
+    "threshold_coeff": 0.6,
+    "consecutive_count": 3,
+    "smoothing_method": "ema"
+  },
+
+  "io_contract": {
+    "input_format": "csv",
+    "encoding": "utf-8",
+    "output_columns": [
+      "datetime",
+      "norm_score",
+      "raw_error",
+      "instant_anomaly",
+      "smooth_anomaly",
+      "level"
+    ],
+    "paths": {
+      "row_results_dir": "output/Valid_results",
+      "run_results_dir": "output/run_results",
+      "model_dir": "artifacts/model",
+      "threshold_dir": "artifacts/transformer_ae",
+      "column_map_file": "config/column_map.json",
+      "meta_csv": ""
+    }
+  },
+
+  "frame_range_config": {
+    "filter_column": "time",
+    "start_value": "-5",
+    "end_value": "5",
+    "description": "学習データをフィルタ。filter_columnの値が[start_value, end_value]範囲内のデータのみを使用"
+  }
+}

@@ -914,6 +914,81 @@ def compute_roc_thresholds(per_file_on: pd.DataFrame, per_file_off: pd.DataFrame
     return thr_df, auc
 
 
+
+def select_best_threshold_for_target_fpr(
+    threshold_df: pd.DataFrame,
+    target_fpr: float,
+) -> pd.Series:
+    candidates = threshold_df.copy()
+    candidates = candidates[
+        np.isfinite(pd.to_numeric(candidates["FPR"], errors="coerce"))
+        & np.isfinite(pd.to_numeric(candidates["TPR"], errors="coerce"))
+        & np.isfinite(pd.to_numeric(candidates["threshold"], errors="coerce"))
+    ].copy()
+    if candidates.empty:
+        raise ValueError("No valid ROC threshold candidates are available")
+
+    candidates["fpr_distance"] = (
+        pd.to_numeric(candidates["FPR"], errors="coerce") - float(target_fpr)
+    ).abs()
+    candidates = candidates.sort_values(
+        ["fpr_distance", "TPR", "threshold"],
+        ascending=[True, False, False],
+        kind="mergesort",
+    )
+    return candidates.iloc[0]
+
+
+def build_threshold_per_file_summary(
+    per_file_on: pd.DataFrame,
+    per_file_off: pd.DataFrame,
+    threshold: float,
+) -> pd.DataFrame:
+    rows: List[Dict[str, Any]] = []
+    for source_df in (per_file_on, per_file_off):
+        for _, row in source_df.iterrows():
+            first_time = first_detection_time_for_threshold(
+                row["_time_values"],
+                row["_score_values"],
+                float(threshold),
+            )
+            rows.append(
+                {
+                    "main_name": str(row["basename"]),
+                    "first_detection_time": first_time,
+                }
+            )
+    return pd.DataFrame(rows, columns=["main_name", "first_detection_time"]).sort_values(
+        "main_name"
+    ).reset_index(drop=True)
+
+
+def save_target_fpr_per_file_summaries(
+    per_file_on: pd.DataFrame,
+    per_file_off: pd.DataFrame,
+    threshold_df: pd.DataFrame,
+    out_dir: Path,
+) -> List[Tuple[float, float, float, Path]]:
+    target_specs = [
+        (1e-3, "10^-3"),
+        (1e-2, "10^-2"),
+        (1e-1, "10^-1"),
+    ]
+    saved: List[Tuple[float, float, float, Path]] = []
+    for target_fpr, label in target_specs:
+        selected = select_best_threshold_for_target_fpr(threshold_df, target_fpr)
+        threshold = float(selected["threshold"])
+        actual_fpr = float(selected["FPR"])
+        summary_df = build_threshold_per_file_summary(
+            per_file_on=per_file_on,
+            per_file_off=per_file_off,
+            threshold=threshold,
+        )
+        out_path = out_dir / f"per_file_summary_all_FPR_{label}.csv"
+        save_dataframe(summary_df, out_path)
+        saved.append((target_fpr, actual_fpr, threshold, out_path))
+    return saved
+
 def plot_roc_curve(threshold_df: pd.DataFrame, auc: float, out_path: Path) -> None:
     roc_points = threshold_df[["FPR", "TPR"]].dropna().sort_values("FPR")
     fpr_values = np.concatenate(([0.0], roc_points["FPR"].to_numpy(dtype=float), [1.0]))
@@ -1051,6 +1126,12 @@ def main() -> None:
     save_dataframe(off_group_df, out_dir / "off_group_summary.csv")
     save_dataframe(roc_thresholds_df, out_dir / "roc_thresholds.csv")
     save_dataframe(roc_summary_df, out_dir / "roc_auc_summary.csv")
+    target_fpr_outputs = save_target_fpr_per_file_summaries(
+        per_file_on=per_file_on,
+        per_file_off=per_file_off,
+        threshold_df=roc_thresholds_df,
+        out_dir=out_dir,
+    )
 
     save_plots = bool(eval_on.get("output", {}).get("save_plots", True))
     if save_plots:
@@ -1064,6 +1145,11 @@ def main() -> None:
     print(f"[INFO] Saved OFF group summary: {out_dir / 'off_group_summary.csv'}")
     print(f"[INFO] Saved ROC thresholds: {out_dir / 'roc_thresholds.csv'}")
     print(f"[INFO] Saved ROC/AUC summary: {out_dir / 'roc_auc_summary.csv'}")
+    for target_fpr, actual_fpr, threshold, out_path in target_fpr_outputs:
+        print(
+            f"[INFO] Saved target-FPR per-file summary: {out_path} "
+            f"(target_FPR={target_fpr:.0e}, actual_FPR={actual_fpr:.10g}, threshold={threshold:.10g})"
+        )
     if save_plots:
         print(f"[INFO] Saved ROC plot: {out_dir / 'roc_curve.png'}")
 

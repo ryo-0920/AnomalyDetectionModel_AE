@@ -1,0 +1,16 @@
+{
+  "feature": "accelpedalangle",
+  "pattern": "*.csv",
+  "output_dir": "AE/outputs",
+  "output_prefix_train": "accel_dist_train",
+  "output_prefix_inference": "accel_dist_inference",
+  "use_training_preproc": false,
+  "definition_path": "config/definition.json",
+  "hparams_path": "config/hyperparams_common.json",
+  "train_window_mode": "mode1",
+  "time_mode": "first_window",
+  "time_column": "time",
+  "train_filter_config_path": "config/tagged_dataset_train.json",
+  "inference_filter_column": null,
+  "inference_filter_value": null
+}

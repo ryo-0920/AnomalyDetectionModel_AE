@@ -27,6 +27,13 @@ TAGGED_DATASET_LABEL = "tagged dataset (ledger + ver_tag001/2/3)"
 _NETWORK_DATASET_DIRS_NORM = {os.path.normpath(p) for p in NETWORK_DATASET_DIRS}
 
 
+def _normalize_path_like_input(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    return os.path.normpath(text) if text else text
+
+
 def _require_tty() -> None:
     if sys.stdin is None or not sys.stdin.isatty():
         raise RuntimeError("Interactive mode requires a TTY terminal.")
@@ -114,7 +121,8 @@ def prompt_path_with_manual(
     else:
         selected = all_candidates[chosen]
 
-    return os.path.normpath(selected) if normalize else selected
+    normalized = _normalize_path_like_input(selected)
+    return normalized if normalize else normalized
 
 
 def _discover_dataset_candidates(project_root: str, pattern: str) -> List[str]:
@@ -234,7 +242,7 @@ def prompt_training_dataset(
     else:
         selected = usable[chosen]
 
-    selected = os.path.normpath(selected)
+    selected = _normalize_path_like_input(selected)
     if not os.path.exists(selected):
         print(f"[WARN] dataset path does not exist yet: {selected}")
     return selected
@@ -295,6 +303,7 @@ def prompt_csv_or_dir_or_glob(
     else:
         selected = all_candidates[chosen]
 
+    selected = _normalize_path_like_input(selected)
     if not any(ch in selected for ch in "*?[]") and not os.path.exists(selected):
         print(f"[WARN] target path does not exist yet: {selected}")
     return selected

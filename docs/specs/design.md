@@ -79,7 +79,7 @@
 - 最終メニューに `manual input` を追加し、自由入力を許可する。
 - `tagged dataset (ledger + ver_tag001/2/3)` を追加し、台帳連携モードを起動できるようにする。
 - 台帳連携モードでは以下を実行する。
-  - 学習時は `config/tagged_dataset_filter_train.json`、推論時は `config/tagged_dataset_filter_infer.json` を読み込む。
+  - 学習時は `config/tagged_dataset_train.json`、推論時は `config/tagged_dataset_inference.json` を読み込む。
   - `ledger`（path/sheet/header_row/file_name_column）設定で台帳Excel（市場走行一覧, ヘッダー3行目）を読み込む。
   - `aq_to_ay_filters`（AQ〜AY）を `enabled + mode + values` で評価する。
   - 複数列フィルタは `combine=AND` で評価する。
